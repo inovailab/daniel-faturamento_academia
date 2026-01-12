@@ -53,6 +53,11 @@ os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 # Inicializa app Flask
 app = Flask(__name__, template_folder="templates", static_folder=None)
+PROCESSO_TERMINOU = False
+
+def marcar_processo_finalizado():
+    global PROCESSO_TERMINOU
+    PROCESSO_TERMINOU = True
 app.config["SECRET_KEY"] = os.getenv("SECRET_KEY", "chave_secreta_para_sessao")
 
 # Inicializa DB e cria usuário admin caso não exista
@@ -270,6 +275,9 @@ def report():
 @app.post("/start_async")
 @login_required
 def start_async():
+    global PROCESSO_TERMINOU
+    PROCESSO_TERMINOU = False  # <<< LIMPA FLAG
+
     extract_dir = os.path.join(EXTRACT_DIR, "temporario")
     os.makedirs(extract_dir, exist_ok=True)
 
@@ -278,9 +286,10 @@ def start_async():
 
     t = threading.Thread(
         target=run_rpa_enter_google_folder,
-        args=(extract_dir, target_folder, BASE_DIR),
+        args=(extract_dir, target_folder, BASE_DIR, marcar_processo_finalizado),
         daemon=True,
     )
+
     t.start()
 
     return jsonify({"ok": True, "started_at": int(time.time())})
@@ -333,6 +342,18 @@ def api_report():
                 "error": str(e),
             }
         )
+
+
+@app.get("/wait_finish")
+@login_required
+def wait_finish():
+    global PROCESSO_TERMINOU
+
+    while not PROCESSO_TERMINOU:
+        time.sleep(1)
+
+    return jsonify({"ready": True})
+
 
 
 @app.route("/uploads/<path:filename>")
