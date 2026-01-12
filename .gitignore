@@ -1,6 +1,15 @@
 # Arquivos de ambiente
 .env
 
+# Google OAuth
+token.json
+credentials.json
+client_secret.json
+
+# Bundle (contém segredos)
+bundle.txt
+bundle.py
+
 # Virtual envs (Python)
 venv/
 .venv/

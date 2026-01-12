@@ -30,8 +30,29 @@ INVALIDOS_GLOBAIS = []
 GMAIL_SCOPES = ['https://www.googleapis.com/auth/gmail.send']
 
 try:
-    _gmail_creds = Credentials.from_authorized_user_file('token.json', GMAIL_SCOPES)
-    gmail_service = build('gmail', 'v1', credentials=_gmail_creds)
+    # Tenta carregar credenciais do ambiente (.env)
+    token_info = {
+        "token": os.getenv("GOOGLE_TOKEN"),
+        "refresh_token": os.getenv("GOOGLE_REFRESH_TOKEN"),
+        "token_uri": os.getenv("GOOGLE_TOKEN_URI"),
+        "client_id": os.getenv("GOOGLE_CLIENT_ID"),
+        "client_secret": os.getenv("GOOGLE_CLIENT_SECRET"),
+        "scopes": os.getenv("GOOGLE_SCOPES", "").split(","),
+        "universe_domain": os.getenv("GOOGLE_UNIVERSE_DOMAIN"),
+        "expiry": os.getenv("GOOGLE_EXPIRY")
+    }
+
+    if all([token_info["token"], token_info["refresh_token"], token_info["client_id"]]):
+        _gmail_creds = Credentials.from_authorized_user_info(token_info, GMAIL_SCOPES)
+        gmail_service = build('gmail', 'v1', credentials=_gmail_creds)
+    else:
+        # Fallback para token.json se não houver no ambiente (opcional, mas recomendado para transição)
+        if os.path.exists('token.json'):
+            _gmail_creds = Credentials.from_authorized_user_file('token.json', GMAIL_SCOPES)
+            gmail_service = build('gmail', 'v1', credentials=_gmail_creds)
+        else:
+            gmail_service = None
+            log("[rpa] Aviso: Credenciais do Google não encontradas no .env nem em token.json")
 except Exception as e:
     gmail_service = None
     print(f"[rpa] Aviso: não foi possível inicializar Gmail API: {e}", flush=True)
