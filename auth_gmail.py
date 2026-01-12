@@ -4,6 +4,10 @@ import pickle
 from google_auth_oauthlib.flow import InstalledAppFlow
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
+from dotenv import load_dotenv
+
+# Carrega variáveis do arquivo .env
+load_dotenv()
 
 # Escopo necessário apenas para enviar emails
 SCOPES = ['https://www.googleapis.com/auth/gmail.send']
