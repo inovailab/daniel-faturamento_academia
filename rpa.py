@@ -12,6 +12,7 @@ from email.mime.text import MIMEText
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 import base64
+import time
 
 from dotenv import load_dotenv
 from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeout
@@ -20,6 +21,19 @@ from playwright.async_api import async_playwright, TimeoutError as PlaywrightTim
 # Carrega .env e parâmetros
 # =========================
 load_dotenv(override=True)
+
+# =========================
+# RPA Monitor Client Setup
+# =========================
+from rpa_monitor_client import setup_rpa_monitor, rpa_log
+
+setup_rpa_monitor(
+    rpa_id=os.getenv("RPA_MONITOR_ID"),
+    host=os.getenv("RPA_MONITOR_HOST"),
+    port=os.getenv("RPA_MONITOR_PORT"),
+    region=os.getenv("RPA_MONITOR_REGION"),
+    transport=os.getenv("RPA_MONITOR_TRANSPORT"),
+)
 
 HEADLESS = os.getenv("HEADLESS", "1").strip() != "0"
 DEBUG_LOGIN = os.getenv("W12_DEBUG_LOGIN", "0").strip() == "1"
@@ -55,6 +69,13 @@ try:
             log("[rpa] Aviso: Credenciais do Google não encontradas no .env nem em token.json")
 except Exception as e:
     gmail_service = None
+    # Importação temporária para evitar erro de referência circular
+    from rpa_monitor_client import rpa_log as temp_rpa_log
+    temp_rpa_log.error(f"Não foi possível inicializar Gmail API", exc=e)
+    temp_rpa_log.screenshot(
+        filename=f"gmail_init_error_{int(time.time())}.png",
+        regiao="inicializacao_gmail"
+    )
     print(f"[rpa] Aviso: não foi possível inicializar Gmail API: {e}", flush=True)
 
 def enviar_email_json_cadastro_invalido(payload: dict) -> None:
@@ -103,6 +124,11 @@ def enviar_email_json_cadastro_invalido(payload: dict) -> None:
         log("📧 E-mail FINAL enviado com sucesso!")
 
     except Exception as e:
+        rpa_log.error("Erro ao enviar e-mail final de cadastros inválidos", exc=e)
+        rpa_log.screenshot(
+            filename=f"email_error_{int(time.time())}.png",
+            regiao="envio_email_invalidos"
+        )
         log(f"Erro ao enviar e-mail final: {e}")
 
 
@@ -204,7 +230,8 @@ NAO_USAR_ANY = re.compile(r"^\s*Não\s*usar\s*(?:-\s*\d+(?:\.\d+)*)?\s*$", re.IG
 # Utilidades
 # =========================
 def log(msg: str) -> None:
-    print(f"[rpa] {msg}", flush=True)
+    """Wrapper para rpa_log.info() mantendo compatibilidade com código existente"""
+    rpa_log.info(msg)
 
 def fmt_date_br(d: datetime) -> str:
     return d.strftime("%d/%m/%Y")
@@ -370,6 +397,7 @@ async def wait_for_login_fields(page, tenant: str, base_login_url: str, max_wait
 # Etapas do fluxo
 # =========================
 async def do_login(page, tenant: str, base_login_url: str, user: str, pwd: str) -> None:
+    rpa_log.info(f"[INÍCIO] Processo de login (tenant={tenant})")
     log(f"Abrindo página de login (tenant={tenant})")
     await page.goto(base_login_url, wait_until="domcontentloaded", timeout=20000)
 
@@ -410,6 +438,14 @@ async def do_login(page, tenant: str, base_login_url: str, user: str, pwd: str) 
         await page.goto(app_home_url, wait_until="domcontentloaded")
         await wait_loading_quiet(page, fast=True)
         log(f"Pós-login. URL atual: {page.url}")
+        rpa_log.info(f"[FIM] Processo de login concluído com sucesso (tenant={tenant})")
+    except Exception as e:
+        rpa_log.error(f"Erro durante processo de login (tenant={tenant})", exc=e)
+        rpa_log.screenshot(
+            filename=f"login_error_{tenant}_{int(time.time())}.png",
+            regiao=f"login_{tenant}"
+        )
+        raise
     finally:
         stop_wd.set()
         try:
@@ -1068,6 +1104,11 @@ async def abrir_perfil_cliente_invalido(page, cliente_id: str) -> None:
             raise RuntimeError("Campo 'País' não encontrado entre spans.")
 
     except Exception as e:
+        rpa_log.error(f"Falha ao localizar campo País para cliente {cliente_id}", exc=e)
+        rpa_log.screenshot(
+            filename=f"pais_error_{cliente_id}_{int(time.time())}.png",
+            regiao=f"leitura_pais_cliente_{cliente_id}"
+        )
         log(f"Falha ao localizar campo País: {e}")
         valor_pais = ""
 
@@ -1206,6 +1247,11 @@ async def abrir_perfil_cliente_invalido(page, cliente_id: str) -> None:
             log("Campo 'Número' não encontrado no DOM.")
 
     except Exception as e:
+        rpa_log.error(f"Erro ao tratar campo Número para cliente {cliente_id}", exc=e)
+        rpa_log.screenshot(
+            filename=f"numero_error_{cliente_id}_{int(time.time())}.png",
+            regiao=f"tratamento_numero_cliente_{cliente_id}"
+        )
         log(f"Erro ao tratar campo Número: {e}")
 
     
@@ -1379,15 +1425,28 @@ async def coletar_registros_tabela(page, limite_por_pagina: int = 100):
                 print(json.dumps(invalidos, ensure_ascii=False, indent=2))
                 print(f"\nTotal de inválidos nesta página: {len(invalidos)}\n")
 
-                # 👉 Processa todos os inválidos sequencialmente
-                for idx, cliente in enumerate(invalidos, 1):
+                # 👉 Desduplicar por cliente_id antes de processar
+                # (um cliente pode ter múltiplos lançamentos — ex: parcelas —
+                #  mas o perfil só precisa ser aberto uma única vez)
+                ids_vistos = set()
+                invalidos_unicos = []
+                for r in invalidos:
+                    m = re.search(r"\b(\d{4,})\b", r.get("cliente", ""))
+                    if m and m.group(1) not in ids_vistos:
+                        ids_vistos.add(m.group(1))
+                        invalidos_unicos.append(r)
+
+                log(f"👥 {len(invalidos)} registros inválidos → {len(invalidos_unicos)} clientes únicos a tratar.")
+
+                # 👉 Processa apenas os clientes únicos sequencialmente
+                for idx, cliente in enumerate(invalidos_unicos, 1):
                     match = re.search(r"\b(\d{4,})\b", cliente.get("cliente", ""))
                     if not match:
-                        log(f"⚠️ ({idx}/{len(invalidos)}) Não foi possível extrair ID de cliente: {cliente.get('cliente')}")
+                        log(f"⚠️ ({idx}/{len(invalidos_unicos)}) Não foi possível extrair ID de cliente: {cliente.get('cliente')}")
                         continue
 
                     cliente_id = match.group(1)
-                    log(f"[{idx}/{len(invalidos)}] Abrindo perfil do cliente inválido: {cliente_id}")
+                    log(f"[{idx}/{len(invalidos_unicos)}] Abrindo perfil do cliente inválido: {cliente_id}")
                     await abrir_perfil_cliente_invalido(page, cliente_id)
                     await asyncio.sleep(0.8)
 
@@ -1455,6 +1514,7 @@ async def coletar_invalidos_ordenando(page):
         total = await linhas.count()
 
         invalidos = []
+        ids_invalidos_vistos = set()  # evita processar o mesmo cliente múltiplas vezes
 
         for i in range(total):
             try:
@@ -1476,6 +1536,11 @@ async def coletar_invalidos_ordenando(page):
                 # se já foi marcado como permanente, pular
                 if cliente_id in permanentes:
                     continue
+
+                # desduplicar: mesmo cliente pode ter N lançamentos (ex: parcelas)
+                if cliente_id in ids_invalidos_vistos:
+                    continue
+                ids_invalidos_vistos.add(cliente_id)
 
                 invalidos.append((cliente_id, cliente_txt, cadastro_txt, detalhes_txt))
 
@@ -1557,62 +1622,75 @@ async def ordenar_por_cadastro(page):
 async def processar_unidade(page, nome_log: str, search_terms: List[str], regex: Pattern) -> None:
     global INVALIDOS_GLOBAIS  # ← acumulador de inválidos globais
 
+    rpa_log.info(f"[INÍCIO] Processamento da unidade: {nome_log}")
     log(f"---- Iniciando unidade: {nome_log} ----")
 
-    # Acessar unidade e filtros iniciais
-    await selecionar_unidade_por_nome(page, search_terms, regex)
-    await abrir_menu_financeiro_e_ir_para_nfs(page)
-    await aplicar_data_ontem(page)
-    await exibir_por_data_lancamento(page)
-    await aplicar_filtro_tributacao(page)
-    await definir_itens_por_pagina(page, 100)
+    try:
+        # Acessar unidade e filtros iniciais
+        await selecionar_unidade_por_nome(page, search_terms, regex)
+        await abrir_menu_financeiro_e_ir_para_nfs(page)
+        await aplicar_data_ontem(page)
+        await exibir_por_data_lancamento(page)
+        await aplicar_filtro_tributacao(page)
+        await definir_itens_por_pagina(page, 100)
 
-    # Verifica se a tabela está vazia
-    tabela_vazia = await page.locator("text='Nenhum resultado encontrado.'").count() > 0
-    if tabela_vazia:
-        log(f"Unidade {nome_log}: nenhum registro encontrado após filtros. Pulando unidade.")
-        return
+        # Verifica se a tabela está vazia
+        tabela_vazia = await page.locator("text='Nenhum resultado encontrado.'").count() > 0
+        if tabela_vazia:
+            log(f"Unidade {nome_log}: nenhum registro encontrado após filtros. Pulando unidade.")
+            rpa_log.info(f"[FIM] Unidade {nome_log} - Sem registros")
+            return
 
-    # Correção automática de inválidos via ordenação
-    await coletar_invalidos_ordenando(page)
+        # Correção automática de inválidos via ordenação
+        await coletar_invalidos_ordenando(page)
 
-    # ============================================================
-    # ETAPA DE VALIDAÇÃO FINAL – COLETA COMPLETA DOS REGISTROS
-    # ============================================================
-    registros = await coletar_registros_tabela(page)
+        # ============================================================
+        # ETAPA DE VALIDAÇÃO FINAL – COLETA COMPLETA DOS REGISTROS
+        # ============================================================
+        registros = await coletar_registros_tabela(page)
 
-    invalidos_finais = [
-        r for r in registros
-        if "invalido" in _normalize_str(r.get("cadastro", "")) or
-           "invalido" in _normalize_str(r.get("detalhes", ""))
-    ]
+        invalidos_finais = [
+            r for r in registros
+            if "invalido" in _normalize_str(r.get("cadastro", "")) or
+               "invalido" in _normalize_str(r.get("detalhes", ""))
+        ]
 
-    # ============================================================
-    # SE AINDA HÁ INVÁLIDOS → ACUMULA NO GLOBAL (SEM ENVIAR E-MAIL AGORA)
-    # ============================================================
-    if invalidos_finais:
-        log(f"⚠️ {len(invalidos_finais)} inválidos finais na unidade {nome_log}")
+        # ============================================================
+        # SE AINDA HÁ INVÁLIDOS → ACUMULA NO GLOBAL (SEM ENVIAR E-MAIL AGORA)
+        # ============================================================
+        if invalidos_finais:
+            log(f"⚠️ {len(invalidos_finais)} inválidos finais na unidade {nome_log}")
 
-        for inv in invalidos_finais:
-            inv["unidade"] = nome_log  # inclui nome da unidade no registro
-            INVALIDOS_GLOBAIS.append(inv)
+            for inv in invalidos_finais:
+                inv["unidade"] = nome_log  # inclui nome da unidade no registro
+                INVALIDOS_GLOBAIS.append(inv)
 
-    else:
-        log(f"✔ Todos os cadastros válidos ao final do processo da unidade {nome_log}")
+        else:
+            log(f"✔ Todos os cadastros válidos ao final do processo da unidade {nome_log}")
 
-    # ============================================================
-    # ETAPA FINAL: ENVIO DAS NOTAS FISCAIS (SE HOUVER REGISTROS)
-    # ============================================================
-    if await has_select_all_checkbox(page):
-        log("Checkbox 'Selecionar todos' presente — iniciando envio de notas fiscais")
+        # ============================================================
+        # ETAPA FINAL: ENVIO DAS NOTAS FISCAIS (SE HOUVER REGISTROS)
+        # ============================================================
+        if await has_select_all_checkbox(page):
+            log("Checkbox 'Selecionar todos' presente — iniciando envio de notas fiscais")
 
-        await selecionar_todos_e_enviar(page)
-        await selecionar_data_ontem_modal(page)
-        await cancelar_modal_enviar_nf(page)
+            await selecionar_todos_e_enviar(page)
+            await selecionar_data_ontem_modal(page)
+            await cancelar_modal_enviar_nf(page)
 
-        log(f"Unidade {nome_log}: processo de envio finalizado com sucesso.")
-    else:
-        log(f"Unidade {nome_log}: sem checkbox 'Selecionar todos' (sem registros). Pulando para a próxima.")
+            log(f"Unidade {nome_log}: processo de envio finalizado com sucesso.")
+            rpa_log.info(f"[FIM] Unidade {nome_log} - Processamento concluído com sucesso")
+        else:
+            log(f"Unidade {nome_log}: sem checkbox 'Selecionar todos' (sem registros). Pulando para a próxima.")
+            rpa_log.info(f"[FIM] Unidade {nome_log} - Sem registros para envio")
+    
+    except Exception as e:
+        rpa_log.error(f"Erro ao processar unidade {nome_log}", exc=e)
+        rpa_log.screenshot(
+            filename=f"unidade_error_{nome_log.replace(' ', '_')}_{int(time.time())}.png",
+            regiao=f"processamento_{nome_log}"
+        )
+        raise
 
 
 
@@ -1656,15 +1734,20 @@ async def run_for_tenant(page, tenant: str, base_login_url: str, user: str, pwd:
 
         ## ORDEM DOS SHOPPINGS
 
-        for nome, termos, rx in unidades_bt[1:]:
+        for nome, termos, rx in unidades_bt:
             try:
                 await processar_unidade(page, nome, termos, rx)
             except Exception as e:
+                rpa_log.error(f"Erro no fluxo da unidade {nome}", exc=e)
                 ts = int(datetime.now().timestamp())
                 nome_sanitizado = re.sub(r'\W+', '_', nome)
                 img = SCREENSHOT_DIR / f"screenshot_erro_{nome_sanitizado}_{ts}.png"
                 try:
                     await page.screenshot(path=str(img), full_page=True)
+                    rpa_log.screenshot(
+                        filename=f"erro_{nome_sanitizado}_{ts}.png",
+                        regiao=f"erro_unidade_{nome_sanitizado}"
+                    )
                     log(f"Erro no fluxo ({nome}). Screenshot: {img}")
                 except Exception as se:
                     log(f"Falha ao salvar screenshot ({nome}): {se}")
@@ -1685,11 +1768,16 @@ async def run_for_tenant(page, tenant: str, base_login_url: str, user: str, pwd:
             try:
                 await processar_unidade(page, nome, termos, rx)
             except Exception as e:
+                rpa_log.error(f"Erro no fluxo da unidade {nome}", exc=e)
                 ts = int(datetime.now().timestamp())
                 tag = re.sub(r'\\W+', '_', nome)
                 img = SCREENSHOT_DIR / f"screenshot_erro_{tag}_{ts}.png"
                 try:
                     await page.screenshot(path=str(img), full_page=True)
+                    rpa_log.screenshot(
+                        filename=f"erro_{tag}_{ts}.png",
+                        regiao=f"erro_unidade_{tag}"
+                    )
                     log(f"Erro no fluxo ({nome}). Screenshot: {img}")
                 except Exception as se:
                     log(f"Falha ao salvar screenshot ({nome}): {se}")
@@ -1722,7 +1810,9 @@ async def definir_itens_por_pagina(page, qtd: int = 100) -> None:
 # Runner principal (contexto novo por tenant + pausa/fechar após bodytech)
 # =========================
 async def _run(callback_fim) -> None:
-
+    
+    rpa_log.info("[INÍCIO] Execução do RPA de Faturamento Academia")
+    
     user, pwd = ensure_env()
     urls = _env_urls_in_order()
     if not urls:
@@ -1832,12 +1922,19 @@ async def _run(callback_fim) -> None:
                 else:
                     log("✔ Nenhum cadastro inválido global encontrado — nenhum e-mail enviado.")
 
+                rpa_log.info("[FIM] Execução do RPA de Faturamento Academia concluída com sucesso")
+                
                 # Chama o callback **uma única vez**
                 callback_fim()
 
                 await browser.close()
 
-            except Exception:
+            except Exception as e:
+                rpa_log.error("Erro durante finalização do RPA", exc=e)
+                rpa_log.screenshot(
+                    filename=f"finalizacao_error_{int(time.time())}.png",
+                    regiao="finalizacao_rpa"
+                )
                 callback_fim()
                 pass
 
