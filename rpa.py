@@ -27,6 +27,16 @@ load_dotenv(override=True)
 # =========================
 from rpa_monitor_client import setup_rpa_monitor, rpa_log
 
+# Silencia print() do rpa-monitor-client (usa print direto, não logging)
+import builtins as _builtins
+_original_print = _builtins.print
+def _filtered_print(*args, **kwargs):
+    msg = str(args[0]) if args else ""
+    if "[rpa-monitor-client]" in msg:
+        return  # suprime mensagens repetitivas do monitor
+    _original_print(*args, **kwargs)
+_builtins.print = _filtered_print
+
 setup_rpa_monitor(
     rpa_id=os.getenv("RPA_MONITOR_ID"),
     host=os.getenv("RPA_MONITOR_HOST"),
@@ -231,6 +241,8 @@ NAO_USAR_ANY = re.compile(r"^\s*Não\s*usar\s*(?:-\s*\d+(?:\.\d+)*)?\s*$", re.IG
 # =========================
 def log(msg: str) -> None:
     """Wrapper para rpa_log.info() mantendo compatibilidade com código existente"""
+    ts = datetime.now().strftime("%H:%M:%S")
+    print(f"[{ts}] {msg}", flush=True)
     rpa_log.info(msg)
 
 def fmt_date_br(d: datetime) -> str:
@@ -408,36 +420,107 @@ async def do_login(page, tenant: str, base_login_url: str, user: str, pwd: str) 
         email_input, pass_input = await wait_for_login_fields(page, tenant, base_login_url, max_wait_ms=15000)
         log("Página de login/autenticação detectada — campos visíveis")
 
+        # Para o watchdog antes de preencher — evita reload que limpa campos
+        stop_wd.set()
+        try:
+            await wd_task
+        except Exception:
+            pass
+        await asyncio.sleep(0.5)
+
         entrar_btn = page.get_by_role("button", name=re.compile(r"^\s*Entrar\s*$", re.IGNORECASE)).first
         try:
             await entrar_btn.wait_for(state="visible", timeout=3000)
         except PlaywrightTimeout:
             entrar_btn = page.locator("button", has_text=re.compile(r"^\s*Entrar\s*$", re.IGNORECASE)).first
 
-        if DEBUG_LOGIN:
-            log(f"Preenchendo usuário: {user}")
-        await email_input.fill("")
-        await email_input.fill(user)
-        await pass_input.fill("")
-        await pass_input.fill(pwd if not os.getenv("W12_LOG_PASSWORD_PLAINTEXT") else os.getenv("W12_PASS",""))
+        # Preenche campos com verificação e retry
+        for fill_attempt in range(3):
+            if DEBUG_LOGIN:
+                log(f"Preenchendo credenciais (tentativa {fill_attempt+1}/3)")
+
+            # Re-localiza os campos a cada tentativa (podem ter sido recriados pelo SPA)
+            email_input, pass_input = await wait_for_login_fields(page, tenant, base_login_url, max_wait_ms=5000)
+
+            await email_input.click()
+            await asyncio.sleep(0.2)
+            await email_input.fill("")
+            await email_input.fill(user)
+            await asyncio.sleep(0.3)
+
+            await pass_input.click()
+            await asyncio.sleep(0.2)
+            await pass_input.fill("")
+            await pass_input.fill(pwd if not os.getenv("W12_LOG_PASSWORD_PLAINTEXT") else os.getenv("W12_PASS",""))
+            await asyncio.sleep(0.3)
+
+            # Verifica se os campos realmente contêm os valores
+            email_val = await email_input.input_value()
+            pass_val = await pass_input.input_value()
+
+            if email_val and pass_val:
+                log(f"Campos preenchidos OK (email={len(email_val)} chars, senha={len(pass_val)} chars)")
+                break
+            else:
+                log(f"⚠ Campos vazios após fill! email='{email_val}', senha={'*'*len(pass_val) if pass_val else 'vazio'}")
+                await asyncio.sleep(1)
+        else:
+            # Última tentativa: usa type() mais lento
+            log("Usando type() lento como fallback...")
+            await email_input.click()
+            await email_input.fill("")
+            await email_input.type(user, delay=30)
+            await pass_input.click()
+            await pass_input.fill("")
+            await pass_input.type(pwd, delay=30)
 
         if not await click_with_retries(entrar_btn, "Entrar", attempts=2, timeout=DEFAULT_TIMEOUT):
             raise RuntimeError("Falha ao clicar em Entrar")
 
-        await asyncio.sleep(0.4)
+        # Aguarda o login processar (URL deve mudar de /autenticacao)
+        log("Aguardando login processar...")
+        login_ok = False
+        for _ in range(20):  # até 10 segundos
+            await asyncio.sleep(0.5)
+            current_url = page.url
+            if f"/app/{tenant}/" in current_url:
+                log(f"Login detectado! URL: {current_url}")
+                login_ok = True
+                break
+            if "/autenticacao" not in current_url and "/acesso/" not in current_url:
+                log(f"URL mudou para: {current_url}")
+                login_ok = True
+                break
 
-        # /autenticacao → Prosseguir (se aparecer)
-        try:
-            if "/autenticacao" in page.url:
+        # /autenticacao → Prosseguir (se ainda estiver na tela de auth)
+        if not login_ok and "/autenticacao" in page.url:
+            log("Ainda na página de autenticação — procurando botão 'Prosseguir'...")
+            try:
                 prosseguir_btn = page.get_by_role("button", name=re.compile(r"^\s*Prosseguir\s*$", re.IGNORECASE)).first
-                await safe_click(prosseguir_btn, "Prosseguir", force=False, timeout=FAST_TIMEOUT)
-        except Exception:
-            pass
+                if await safe_click(prosseguir_btn, "Prosseguir", force=False, timeout=DEFAULT_TIMEOUT):
+                    await asyncio.sleep(2)
+                    log(f"Após Prosseguir — URL: {page.url}")
+                else:
+                    log("Botão 'Prosseguir' não encontrado ou não clicável")
+            except Exception:
+                log("Botão 'Prosseguir' não disponível")
 
+        # Navega para a home do app e verifica se login deu certo
         app_home_url = f"https://evo5.w12app.com.br/#/app/{tenant}/-2/inicio/geral"
-        await page.goto(app_home_url, wait_until="domcontentloaded")
-        await wait_loading_quiet(page, fast=True)
-        log(f"Pós-login. URL atual: {page.url}")
+        for tentativa in range(3):
+            await page.goto(app_home_url, wait_until="domcontentloaded")
+            await wait_loading_quiet(page, fast=True)
+            await asyncio.sleep(1)
+            if f"/app/{tenant}/" in page.url:
+                log(f"✅ Login concluído com sucesso! URL: {page.url}")
+                break
+            log(f"Tentativa {tentativa+1}/3 — ainda em: {page.url}")
+            await asyncio.sleep(2)
+        else:
+            log(f"⚠ Login pode ter falhado — URL final: {page.url}")
+            if "/acesso/" in page.url or "/autenticacao" in page.url:
+                raise RuntimeError(f"Login falhou para tenant '{tenant}'. URL final: {page.url}")
+
         rpa_log.info(f"[FIM] Processo de login concluído com sucesso (tenant={tenant})")
     except Exception as e:
         rpa_log.error(f"Erro durante processo de login (tenant={tenant})", exc=e)
@@ -682,12 +765,12 @@ async def aplicar_data_ontem(page) -> None:
 
 
 
-async def exibir_por_data_lancamento(page) -> None:
-    log("Configurando 'Exibir por' → 'Data de Lançamento'")
+async def exibir_por_data_vencimento(page) -> None:
+    log("Configurando 'Exibir por' → 'Data de Vencimento'")
     abrir = page.locator("button[data-cy='abrirFiltro']").first
     await abrir.wait_for(state="visible", timeout=DEFAULT_TIMEOUT)
 
-    patt = re.compile(r"^\s*Data\s*(de\s*)?lan[çc]amento\s*$", re.IGNORECASE)
+    patt = re.compile(r"^\s*Data\s*(de\s*)?vencimento\s*$", re.IGNORECASE)
 
     async def open_overlay_or_retry() -> object:
         for _ in range(2):
@@ -1630,7 +1713,7 @@ async def processar_unidade(page, nome_log: str, search_terms: List[str], regex:
         await selecionar_unidade_por_nome(page, search_terms, regex)
         await abrir_menu_financeiro_e_ir_para_nfs(page)
         await aplicar_data_ontem(page)
-        await exibir_por_data_lancamento(page)
+        await exibir_por_data_vencimento(page)
         await aplicar_filtro_tributacao(page)
         await definir_itens_por_pagina(page, 100)
 
@@ -1717,6 +1800,12 @@ async def run_for_tenant(page, tenant: str, base_login_url: str, user: str, pwd:
             ("BT TERES - Shopping Rio Poty - 102",
              ["Shopping Rio Poty", "Shop. Rio Poty", "rio poty", "BT TERES"],
              SHOPPING_RIO_POTY_REGEX),
+            ("FR MALVA - Shopping Mestre Álvaro - 71",
+             ["Mestre Álvaro", "MALVA", "Álvaro", "Mestre"],
+             SHOPPING_MESTRE_ALVARO_EXATO),
+            ("Shopping Moxuara",
+             ["moxuara", "shopping moxuara", "moxuará"],
+             SHOPPING_MOXUARA_REGEX),
         ]
         # for nome, termos, rx in unidades_bt:
         #     try:
@@ -1753,35 +1842,6 @@ async def run_for_tenant(page, tenant: str, base_login_url: str, user: str, pwd:
                     log(f"Falha ao salvar screenshot ({nome}): {se}")
                 continue
 
-        return
-
-    elif tenant == "formula":
-        unidades_formula: List[Tuple[str, List[str], Pattern]] = [
-            ("FR MALVA - Shopping Mestre Álvaro - 71",
-             ["Mestre Álvaro", "MALVA", "Álvaro", "Mestre"],
-             SHOPPING_MESTRE_ALVARO_EXATO),
-            ("Shopping Moxuara",
-             ["moxuara", "shopping moxuara", "moxuará"],
-             SHOPPING_MOXUARA_REGEX),
-        ]
-        for nome, termos, rx in unidades_formula:
-            try:
-                await processar_unidade(page, nome, termos, rx)
-            except Exception as e:
-                rpa_log.error(f"Erro no fluxo da unidade {nome}", exc=e)
-                ts = int(datetime.now().timestamp())
-                tag = re.sub(r'\\W+', '_', nome)
-                img = SCREENSHOT_DIR / f"screenshot_erro_{tag}_{ts}.png"
-                try:
-                    await page.screenshot(path=str(img), full_page=True)
-                    rpa_log.screenshot(
-                        filename=f"erro_{tag}_{ts}.png",
-                        regiao=f"erro_unidade_{tag}"
-                    )
-                    log(f"Erro no fluxo ({nome}). Screenshot: {img}")
-                except Exception as se:
-                    log(f"Falha ao salvar screenshot ({nome}): {se}")
-                continue
         return
 
     else:
@@ -1828,7 +1888,11 @@ async def _run(callback_fim) -> None:
         try:
             for idx, url in enumerate(urls, 1):
                 tenant = _extract_tenant_from_url(url)
-                log(f"=== ({idx}/{len(urls)}) Tenant '{tenant}' ===")
+                log(f"")
+                log(f"{'='*60}")
+                log(f"  INICIANDO TENANT ({idx}/{len(urls)}): {tenant.upper()}")
+                log(f"  URL: {url}")
+                log(f"{'='*60}")
 
                 context = await browser.new_context(no_viewport=True)
                 tenant_js = tenant
@@ -1878,23 +1942,32 @@ async def _run(callback_fim) -> None:
                 try:
                     await run_for_tenant(page, tenant, url, user, pwd)
 
+                    log(f"✅ Tenant '{tenant}' finalizado com SUCESSO!")
                     if tenant == "bodytech":
-                        log("Finalizado fluxo do tenant 'bodytech'. Aguardando 5s antes de abrir a próxima URL…")
+                        log("Aguardando 5s antes de abrir a próxima URL…")
                         await asyncio.sleep(5)
                         try:
                             await page.close()
                         except:
                             pass
 
-                except Exception:
+                except Exception as e:
+                    import traceback
+                    log(f"{'!'*60}")
+                    log(f"  ❌ ERRO NO TENANT '{tenant.upper()}'")
+                    log(f"  Erro: {e}")
+                    log(f"  Traceback:")
+                    for tb_line in traceback.format_exc().splitlines():
+                        log(f"    {tb_line}")
+                    log(f"{'!'*60}")
                     ts = int(datetime.now().timestamp())
                     img = SCREENSHOT_DIR / f"screenshot_erro_tenant_{tenant}_{ts}.png"
                     try:
                         await page.screenshot(path=str(img), full_page=True)
-                        log(f"Erro no fluxo (tenant={tenant}). Screenshot: {img}")
+                        log(f"Screenshot salvo: {img}")
                     except Exception as se:
                         log(f"Falha ao salvar screenshot (tenant={tenant}): {se}")
-                    raise
+                    continue
 
                 finally:
                     try:
