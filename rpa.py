@@ -90,9 +90,10 @@ except Exception as e:
 
 def enviar_email_json_cadastro_invalido(payload: dict) -> None:
     """
-    Envia PARA O FINAL do processo um e-mail com:
-    - Um texto pequeno dizendo quantos inválidos existem
-    - Cada inválido formatado no padrão pedindo
+    Envia ao final do processo um e-mail:
+    - sucesso=True e sem inválidos → mensagem simples de conclusão
+    - com inválidos              → lista deduplificada por (cliente+unidade)
+                                   com apenas: cliente, cpf, cadastro, detalhes, unidade
     """
 
     if gmail_service is None:
@@ -100,27 +101,52 @@ def enviar_email_json_cadastro_invalido(payload: dict) -> None:
         return
 
     try:
-        total = payload.get("total_invalidos", 0)
+        hoje_str = datetime.now().strftime("%d/%m/%Y")
         invalidos = payload.get("invalidos", [])
+        sucesso   = payload.get("sucesso", False)
 
-        # Frase curta e bonita
-        if total == 1:
-            frase = "Foi encontrado 1 cadastro inválido que não pôde ser corrigido automaticamente.\n\n"
+        if sucesso and not invalidos:
+            # ── E-mail de sucesso puro ──────────────────────────────────────
+            assunto = f"EVO – Processo do dia {hoje_str} finalizado com sucesso ✅"
+            corpo   = f"Processo do dia {hoje_str} finalizado com sucesso sem cadastros inválidos ✅"
+
         else:
-            frase = f"Foram encontrados {total} cadastros inválidos que não puderam ser corrigidos automaticamente.\n\n"
+            # ── E-mail com inválidos ────────────────────────────────────────
+            assunto = f"EVO – Cadastros inválidos não corrigidos – {hoje_str}"
 
-        # Agora montamos JSONS individuais formatados como você pediu
-        partes = []
-        for inv in invalidos:
-            bloco = json.dumps(inv, ensure_ascii=False, indent=2)
-            partes.append(bloco)
+            # Deduplica por (cliente, cpf, unidade): 1 entrada por pessoa por unidade
+            vistos: set = set()
+            invalidos_unicos = []
+            for inv in invalidos:
+                chave = (
+                    inv.get("cliente", "").strip(),
+                    inv.get("cpf",     "").strip(),
+                    inv.get("unidade", "").strip(),
+                )
+                if chave in vistos:
+                    continue
+                vistos.add(chave)
+                invalidos_unicos.append(inv)
 
-        corpo = frase + "\n\n".join(partes)
+            total_unico = len(invalidos_unicos)
+            if total_unico == 1:
+                frase = "Foi encontrado 1 cadastro inválido que não pôde ser corrigido automaticamente.\n\n"
+            else:
+                frase = f"Foram encontrados {total_unico} cadastros inválidos que não puderam ser corrigidos automaticamente.\n\n"
+
+            # Apenas os campos relevantes
+            CAMPOS = ["cliente", "cpf", "cadastro", "detalhes", "unidade"]
+            partes = []
+            for inv in invalidos_unicos:
+                resumo = {k: inv[k] for k in CAMPOS if k in inv}
+                partes.append(json.dumps(resumo, ensure_ascii=False, indent=2))
+
+            corpo = frase + "\n\n".join(partes)
 
         # Monta e envia o e-mail
         msg = MIMEMultipart('alternative')
-        msg['to'] = "danieltl@poli.ufrj.br"
-        msg['subject'] = "EVO – Cadastros inválidos não corrigidos (relatório final)"
+        msg['to']      = "lourenco.sodre@sacavalcante.com.br, gabrieli.dias@sacavalcante.com.br, katia.canal@sacavalcante.com.br, hub@inovailab.com"
+        msg['subject'] = assunto
 
         msg.attach(MIMEText(corpo, "plain"))
         msg.attach(MIMEText(f"<pre>{corpo}</pre>", "html"))
@@ -131,7 +157,7 @@ def enviar_email_json_cadastro_invalido(payload: dict) -> None:
             body={'raw': raw}
         ).execute()
 
-        log("📧 E-mail FINAL enviado com sucesso!")
+        log(f"📧 E-mail FINAL enviado! (assunto: {assunto})")
 
     except Exception as e:
         rpa_log.error("Erro ao enviar e-mail final de cadastros inválidos", exc=e)
@@ -224,17 +250,20 @@ SHOPPING_DA_ILHA_REGEX = re.compile(r"^\s*BT\s*SLUIS\s*-\s*Shopping da Ilha\s*-\
 SHOPPING_VITORIA_REGEX = re.compile(r"^\s*BT\s*VITOR\s*-\s*Shopping Vit[oó]ria\s*-\s*89\s*$", re.IGNORECASE)
 SHOPPING_RIO_POTY_REGEX = re.compile(r"^\s*BT\s*TERES\s*-\s*Shop(?:ping)?\.?\s*Rio\s*Poty\s*-\s*102\s*$", re.IGNORECASE)
 
-# Pós-Rio Poty (tenant formula)
+# Mestre Álvaro — prefixo real no sistema é BT MALVA
 SHOPPING_MESTRE_ALVARO_EXATO = re.compile(
-    r"^\s*FR\s*MALVA\s*-\s*Shopping\s*Mestre\s*[ÁA]lvaro\s*-\s*71\s*$",
-    re.IGNORECASE
+    r"BT\s*MALVA|Mestre\s*[\xc1A]lvaro|mestre\s*alvaro",
+    re.IGNORECASE | re.UNICODE
 )
 
-# Moxuara — mais tolerante (pega "moxuara" / "moxuará" / "moxuaro" por segurança)
-SHOPPING_MOXUARA_REGEX = re.compile(r"\bmoxuar[aoá]\b", re.IGNORECASE)
+# Moxuara — cobre BT MOXUA e variações de grafia
+SHOPPING_MOXUARA_REGEX = re.compile(r"BT\s*MOXUA|\bmoxuar[ao\xed\xe1]?\b", re.IGNORECASE | re.UNICODE)
 
 # Padrão genérico para “Não usar - {código}”
 NAO_USAR_ANY = re.compile(r"^\s*Não\s*usar\s*(?:-\s*\d+(?:\.\d+)*)?\s*$", re.IGNORECASE)
+
+# Data do filtro (armazenada para repetir no modal de envio)
+DATA_FILTRO_ATUAL = ""
 
 # =========================
 # Utilidades
@@ -582,6 +611,7 @@ async def selecionar_unidade_por_nome(page, search_terms: List[str], target_rege
         for term in search_terms:
             await search_input.fill("")
             await search_input.type(term, delay=8)
+            await asyncio.sleep(0.4)  # aguarda o dropdown filtrar
 
             # tentar por texto exato/regex
             try:
@@ -725,29 +755,61 @@ async def abrir_menu_financeiro_e_ir_para_nfs(page) -> None:
 
 
 async def aplicar_data_ontem(page) -> None:
-    log("Aplicando filtro de data: opção 'Ontem'")
+    global DATA_FILTRO_ATUAL
+    
+    # ⚠️ FILTRO DE TESTE DA DATA — Mude para False para voltar ao comportamento de "Ontem"
+    TESTE_DATA_09_MARCO = False
 
-    # 1️⃣ Abre o seletor de data
-    btn_data = page.locator("button[data-cy='EFD-DatePickerBTN']").first
-    await btn_data.wait_for(state="visible", timeout=DEFAULT_TIMEOUT)
-    await btn_data.click()
-    await asyncio.sleep(0.4)
+    if TESTE_DATA_09_MARCO:
+        DATA_FILTRO_ATUAL = "09/03/2026"
+        log(f"Aplicando filtro de data [TESTE]: {DATA_FILTRO_ATUAL}")
 
-    # 2️⃣ Seleciona "Ontem"
-    ontem = page.locator("div.mat-list-item-content", has_text=re.compile(r"^\s*Ontem\s*$", re.IGNORECASE)).first
+        # 1️⃣ Abre o dropdown de filtros (Filtro por período)
+        btn_data = page.locator("button[data-cy='EFD-DatePickerBTN']").first
+        await btn_data.wait_for(state="visible", timeout=DEFAULT_TIMEOUT)
+        await btn_data.click()
+        await asyncio.sleep(0.4)
 
-    await ontem.wait_for(state="visible", timeout=DEFAULT_TIMEOUT)
+        # 2️⃣ Clica no input para abrir o calendário
+        campo_data = page.locator("input[data-cy='EFD-FormInput-00']").first
+        await campo_data.wait_for(state="visible", timeout=DEFAULT_TIMEOUT)
+        await campo_data.click(force=True)
+        await asyncio.sleep(0.4)
+        log("Campo de data clicado (EFD-FormInput-00) para abrir calendário")
 
-    try:
-        await ontem.click()
-    except:
-        await ontem.click(force=True)
+        # 3️⃣ Clica no dia 9 duas vezes (para intervalo Início=9 e Fim=9)
+        dia = page.get_by_role("gridcell", name="9").first
+        await dia.wait_for(state="visible", timeout=DEFAULT_TIMEOUT)
+        await dia.click()
+        await asyncio.sleep(0.3)
+        await dia.click()
+        log("Dia 9 selecionado (clique duplo) no calendário")
 
-    log("Opção 'Ontem' selecionada.")
+    else:
+        log("Aplicando filtro de data: opção 'Ontem'")
+
+        # 1️⃣ Abre o seletor de data
+        btn_data = page.locator("button[data-cy='EFD-DatePickerBTN']").first
+        await btn_data.wait_for(state="visible", timeout=DEFAULT_TIMEOUT)
+        await btn_data.click()
+        await asyncio.sleep(0.4)
+
+        # 2️⃣ Seleciona "Ontem"
+        ontem = page.locator("div.mat-list-item-content", has_text=re.compile(r"^\s*Ontem\s*$", re.IGNORECASE)).first
+        await ontem.wait_for(state="visible", timeout=DEFAULT_TIMEOUT)
+        try:
+            await ontem.click()
+        except:
+            await ontem.click(force=True)
+            
+        hoje = datetime.now()
+        dt_ontem = hoje - timedelta(days=1)
+        DATA_FILTRO_ATUAL = dt_ontem.strftime("%d/%m/%Y")
+        log(f"Opção 'Ontem' selecionada. Data calculada: {DATA_FILTRO_ATUAL}")
 
     await asyncio.sleep(0.3)
 
-    # 3️⃣ Clica em APLICAR
+    # 3️⃣/4️⃣ Clica em APLICAR
     aplicar = page.locator(
         "button[data-cy='EFD-ApplyButton'], button",
         has_text=re.compile(r"Aplicar", re.IGNORECASE)
@@ -758,7 +820,7 @@ async def aplicar_data_ontem(page) -> None:
 
     await wait_loading_quiet(page, fast=True)
 
-    log("Filtro de data aplicado: Ontem")
+    log("Filtro de data aplicado.")
 
 
 
@@ -938,45 +1000,35 @@ async def digitar_data_util_anterior_no_input(page) -> None:
 
 async def selecionar_data_ontem_modal(page) -> None:
     """
-    Dentro do modal de envio:
-    - Abre o calendário
-    - Seleciona o dia anterior ao atual
-    - Se hoje for dia 1, volta um mês e seleciona o último dia
+    Dentro do modal de envio: preenche o campo 'Selecione a data' 
+    com a MESMA DATA calculada/definida no filtro (DATA_FILTRO_ATUAL)
+    usando digitação direta (mais seguro que clicar no calendário).
     """
-    hoje = datetime.now()
-    ontem = hoje - timedelta(days=1)
-    log(f"Abrindo calendário e selecionando a data de ontem: {ontem.strftime('%d/%m/%Y')}")
+    global DATA_FILTRO_ATUAL
+    if not DATA_FILTRO_ATUAL:
+        # Fallback de segurança caso não exista por algum motivo bizarro
+        DATA_FILTRO_ATUAL = (datetime.now() - timedelta(days=1)).strftime("%d/%m/%Y")
 
-    # Abre o calendário (ícone do datepicker)
-    btn_calendar = page.locator("svg.mat-datepicker-toggle-default-icon").first
-    await btn_calendar.wait_for(state="visible", timeout=DEFAULT_TIMEOUT)
-    await btn_calendar.click()
+    log(f"Preenchendo no modal a mesma data do filtro: {DATA_FILTRO_ATUAL}")
+
+    # Localiza o input dentro do modal de Enviar NF
+    dialog = page.locator("mat-dialog-container").last
+    campo = dialog.locator("input[placeholder*='Selecione a data' i]").first
+    
+    if not await campo.is_visible():
+        campo = dialog.locator("input").first
+        
+    await campo.wait_for(state="visible", timeout=DEFAULT_TIMEOUT)
+    await campo.click()
+    await page.keyboard.press("Control+A")
+    await asyncio.sleep(0.1)
+    await page.keyboard.press("Backspace")
+    await asyncio.sleep(0.1)
+    
+    # Digita o texto formatado no campo de data
+    await campo.type(DATA_FILTRO_ATUAL, delay=24)
     await asyncio.sleep(0.4)
-
-    # Caso o dia atual seja 1 → voltar um mês
-    if hoje.day == 1:
-        log("Hoje é dia 1 — voltando um mês e selecionando o último dia do mês anterior")
-        btn_prev = page.locator("button.mat-calendar-previous-button").first
-        await btn_prev.wait_for(state="visible", timeout=DEFAULT_TIMEOUT)
-        await btn_prev.click()
-        await asyncio.sleep(0.4)
-
-        # Seleciona o último dia do mês (31, 30, 29 ou 28)
-        for dia in ["31", "30", "29", "28"]:
-            dia_loc = page.locator("div.mat-calendar-body-cell-content", has_text=dia).first
-            if await dia_loc.count():
-                await dia_loc.click()
-                log(f"Selecionado último dia do mês anterior: {dia}")
-                break
-    else:
-        # Seleciona o dia de ontem
-        dia_ontem = str(ontem.day)
-        dia_loc = page.locator("div.mat-calendar-body-cell-content", has_text=dia_ontem).first
-        await dia_loc.wait_for(state="visible", timeout=DEFAULT_TIMEOUT)
-        await dia_loc.click()
-        log(f"Dia {dia_ontem} selecionado com sucesso")
-
-    await asyncio.sleep(0.5)
+    log(f"Data {DATA_FILTRO_ATUAL} preenchida no modal com sucesso")
 
 async def cancelar_modal_enviar_nf(page) -> None:
     log("Cancelando modal 'Enviar NF'")
@@ -995,6 +1047,62 @@ async def cancelar_modal_enviar_nf(page) -> None:
         await asyncio.sleep(0.2)
     await wait_loading_quiet(page, fast=True)
     log("Modal 'Enviar NF' cancelado com sucesso")
+
+async def confirmar_envio_nf(page) -> None:
+    """
+    Clica no botão verde ENVIAR dentro do modal 'Enviar NF'
+    e aguarda o modal fechar + página recarregar.
+    """
+    log("Confirmando envio de NF (botão verde ENVIAR)")
+    dialog = page.get_by_role("dialog", name=re.compile(r"^\s*Enviar\s*NF\s*$", re.IGNORECASE)).first
+    if not await dialog.count():
+        dialog = page.locator("mat-dialog-container").last
+
+    # Tenta localizar o botão ENVIAR (verde) — vários seletores em ordem de preferência
+    enviar_btn = None
+    for sel in [
+        "button[color='primary']:not([disabled])",          # botão primary (verde Material)
+        "button.mat-primary:not([disabled])",
+        "button[data-cy='confirmar-envio']:not([disabled])",
+    ]:
+        loc = dialog.locator(sel).first
+        if await loc.count():
+            enviar_btn = loc
+            break
+
+    # Fallback final: botão com texto "Enviar" que não seja Cancelar
+    if enviar_btn is None:
+        enviar_btn = dialog.get_by_role(
+            "button", name=re.compile(r"^\s*Enviar\s*$", re.IGNORECASE)
+        ).first
+
+    await enviar_btn.wait_for(state="visible", timeout=DEFAULT_TIMEOUT)
+    if not await click_with_retries(enviar_btn, "Botão ENVIAR (modal NF)", attempts=3, timeout=DEFAULT_TIMEOUT):
+        raise RuntimeError("Não foi possível clicar no botão ENVIAR do modal.")
+
+    # Após clicar em ENVIAR, o sistema deve processar e exibir um botão FECHAR e/ou modal de sucesso
+    log("Aguardando processamento e botão FECHAR...")
+    try:
+        fechar_btn = page.locator("button", has_text=re.compile(r"^\s*FECHAR\s*$", re.IGNORECASE)).first
+        # Damos um tempo maior porque o envio real costuma demorar
+        await fechar_btn.wait_for(state="visible", timeout=30000)
+        await click_with_retries(fechar_btn, "Botão FECHAR", attempts=3, timeout=DEFAULT_TIMEOUT)
+    except Exception:
+        log("⚠ Botão FECHAR não apareceu (ou já fechou direto).")
+
+    # Garante que não sobrou nenhum mat-dialog-container na tela (Força o fechamento via Escape)
+    try:
+        dialogs = page.locator("mat-dialog-container")
+        for _ in range(3):
+            if await dialogs.count() == 0:
+                break
+            await page.keyboard.press("Escape")
+            await asyncio.sleep(1)
+    except Exception:
+        pass
+
+    await wait_loading_quiet(page)
+    log("✅ Envio de NF confirmado com sucesso (todos os modais fechados).")
 
 # =========================================================
 # ======== Validação “sem paginação / via scroll” =========
@@ -1759,7 +1867,7 @@ async def processar_unidade(page, nome_log: str, search_terms: List[str], regex:
 
             await selecionar_todos_e_enviar(page)
             await selecionar_data_ontem_modal(page)
-            await cancelar_modal_enviar_nf(page)
+            await confirmar_envio_nf(page)
 
             log(f"Unidade {nome_log}: processo de envio finalizado com sucesso.")
             rpa_log.info(f"[FIM] Unidade {nome_log} - Processamento concluído com sucesso")
@@ -1791,6 +1899,12 @@ async def run_for_tenant(page, tenant: str, base_login_url: str, user: str, pwd:
             ("BT VELHA - Shop. Praia da Costa - 27",
              ["Shop. Praia da Costa", "praia da costa", "BT VELHA"],
              PRAIA_DA_COSTA_REGEX),
+            ("BT MALVA - Shopping Mestre Álvaro - 71",
+             ["BT MALVA", "MALVA", "Mestre Alvaro", "Mestre", "Mestre Álvaro"],
+             SHOPPING_MESTRE_ALVARO_EXATO),
+            ("BT MOXUA - Shopping Moxuara - 76",
+             ["BT MOXUA", "MOXUA", "moxuara", "shopping moxuara"],
+             SHOPPING_MOXUARA_REGEX),
             ("BT SLUIS - Shopping da Ilha - 80",
              ["Shopping da Ilha", "da ilha", "BT SLUIS"],
              SHOPPING_DA_ILHA_REGEX),
@@ -1800,12 +1914,6 @@ async def run_for_tenant(page, tenant: str, base_login_url: str, user: str, pwd:
             ("BT TERES - Shopping Rio Poty - 102",
              ["Shopping Rio Poty", "Shop. Rio Poty", "rio poty", "BT TERES"],
              SHOPPING_RIO_POTY_REGEX),
-            ("FR MALVA - Shopping Mestre Álvaro - 71",
-             ["Mestre Álvaro", "MALVA", "Álvaro", "Mestre"],
-             SHOPPING_MESTRE_ALVARO_EXATO),
-            ("Shopping Moxuara",
-             ["moxuara", "shopping moxuara", "moxuará"],
-             SHOPPING_MOXUARA_REGEX),
         ]
         # for nome, termos, rx in unidades_bt:
         #     try:
@@ -1823,7 +1931,13 @@ async def run_for_tenant(page, tenant: str, base_login_url: str, user: str, pwd:
 
         ## ORDEM DOS SHOPPINGS
 
+        # ⚠️ FILTRO DE TESTE — coloque None para rodar todos os shoppings
+        TESTAR_APENAS = None
+
         for nome, termos, rx in unidades_bt:
+            if TESTAR_APENAS and TESTAR_APENAS.lower() not in nome.lower():
+                log(f"[TESTE] Pulando unidade: {nome}")
+                continue
             try:
                 await processar_unidade(page, nome, termos, rx)
             except Exception as e:
@@ -1981,19 +2095,25 @@ async def _run(callback_fim) -> None:
         finally:
             try:
                 # ============================================================
-                # ENVIO DO ÚNICO E-MAIL FINAL COM TODOS OS INVÁLIDOS
+                # ENVIO DO ÚNICO E-MAIL FINAL
                 # ============================================================
                 if INVALIDOS_GLOBAIS:
                     payload = {
                         "timestamp": int(datetime.now().timestamp()),
                         "total_invalidos": len(INVALIDOS_GLOBAIS),
                         "invalidos": INVALIDOS_GLOBAIS,
+                        "sucesso": False,
                     }
-
                     enviar_email_json_cadastro_invalido(payload)
-                    log("📧 E-mail FINAL enviado com todos os cadastros inválidos.")
                 else:
-                    log("✔ Nenhum cadastro inválido global encontrado — nenhum e-mail enviado.")
+                    # Processo concluído sem nenhuma falha
+                    payload = {
+                        "timestamp": int(datetime.now().timestamp()),
+                        "total_invalidos": 0,
+                        "invalidos": [],
+                        "sucesso": True,
+                    }
+                    enviar_email_json_cadastro_invalido(payload)
 
                 rpa_log.info("[FIM] Execução do RPA de Faturamento Academia concluída com sucesso")
                 
