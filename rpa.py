@@ -146,7 +146,7 @@ def enviar_email_json_cadastro_invalido(payload: dict) -> None:
 
         # Monta e envia o e-mail
         msg = MIMEMultipart('alternative')
-        msg['to']      = "lourenco.sodre@sacavalcante.com.br, gabrieli.dias@sacavalcante.com.br, katia.canal@sacavalcante.com.br, hub@inovailab.com"
+        msg['to']      = "hub@inovailab.com"
         msg['subject'] = assunto
 
         msg.attach(MIMEText(corpo, "plain"))
