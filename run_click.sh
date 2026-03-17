@@ -19,7 +19,7 @@ python --version >> "$LOG"
 cd /home/felipe/daniel-faturamento_academia || exit 1
 
 echo "[DEBUG] Rodando click_automatico.py..." >> "$LOG"
-python click_automatico.py >> "$LOG" 2>&1
+python -u click_automatico.py >> "$LOG" 2>&1
 
 echo "✅ Script completo finalizado com sucesso." >> "$LOG"
 echo "[DEBUG] Finalizado run_click.sh $(date -u '+%Y-%m-%d %H:%M:%S')" >> "$LOG"
