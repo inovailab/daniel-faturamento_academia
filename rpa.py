@@ -445,7 +445,8 @@ async def wait_for_login_fields(page, tenant: str, base_login_url: str, max_wait
 async def do_login(page, tenant: str, base_login_url: str, user: str, pwd: str) -> None:
     rpa_log.info(f"[INÍCIO] Processo de login (tenant={tenant})")
     log(f"Abrindo página de login (tenant={tenant})")
-    await page.goto(base_login_url, wait_until="domcontentloaded", timeout=60000)
+    # Trocado para wait_until="commit" que responde de imediato (pra não parecer travado), a próxima função wait_for_login_fields já aguarda os botões surgirem sozinhos
+    await page.goto(base_login_url, wait_until="commit", timeout=25000)
 
     stop_wd = asyncio.Event()
     wd_task = asyncio.create_task(tenant_watchdog(page, stop_wd, tenant))
@@ -2013,7 +2014,12 @@ async def _run(callback_fim) -> None:
                 log(f"  URL: {url}")
                 log(f"{'='*60}")
 
-                context = await browser.new_context(no_viewport=True)
+                context = await browser.new_context(
+                    no_viewport=True,
+                    user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+                    locale="pt-BR",
+                    color_scheme="light"
+                )
                 tenant_js = tenant
                 await context.add_init_script(
                     """
