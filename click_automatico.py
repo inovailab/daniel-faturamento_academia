@@ -1,7 +1,7 @@
 from playwright.sync_api import sync_playwright
 import time
 
-URL = "https://fluxword.com"
+URL = "https://academiafatsc.com"
 USER = "admin"
 PASS = "admin123"
 
