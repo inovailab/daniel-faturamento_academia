@@ -20,7 +20,8 @@ from playwright.async_api import async_playwright, TimeoutError as PlaywrightTim
 # =========================
 # Carrega .env e parâmetros
 # =========================
-load_dotenv(override=True)
+# override=False garante que se a variável já existir (exportada via shell no run_click.sh), ela não seja esmagada com o que tem no .env
+load_dotenv(override=False)
 
 # =========================
 # RPA Monitor Client Setup
