@@ -348,11 +348,8 @@ def api_report():
 @login_required
 def wait_finish():
     global PROCESSO_TERMINOU
-
-    while not PROCESSO_TERMINOU:
-        time.sleep(1)
-
-    return jsonify({"ready": True})
+    # Retorna o status IMEDIATAMENTE sem prender a conexão (evita erro 504 no servidor)
+    return jsonify({"ready": PROCESSO_TERMINOU})
 
 
 

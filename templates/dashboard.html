@@ -198,20 +198,29 @@
         uploadMsg.textContent = "Processando… aguarde.";
         uploadMsg.className = "msg ok";
 
-        // Agora aguardamos o término do processo através de UMA chamada
-        // Backend deve responder pronto quando finalizar
-        const final = await fetch("{{ url_for('wait_finish') }}", { method: "GET" });
-        const done = await final.json();
+        // Agora aguardamos recursivamente e de forma resiliente
+        const checkStatus = async () => {
+          try {
+            const final = await fetch("{{ url_for('wait_finish') }}", { method: "GET" });
+            const done = await final.json();
 
-        if (done.ready) {
-          overlay.classList.add("hidden");
-          btnStart.disabled = false;
-          uploadMsg.textContent = "Processo finalizado com sucesso!";
-          uploadMsg.className = "msg ok";
-          return;
-        }
+            if (done.ready) {
+              overlay.classList.add("hidden");
+              btnStart.disabled = false;
+              uploadMsg.textContent = "Processo finalizado com sucesso!";
+              uploadMsg.className = "msg ok";
+            } else {
+              // Se não terminou ainda, checa de novo após 3 segundos
+              setTimeout(checkStatus, 3000);
+            }
+          } catch (e) {
+            // Em caso de Timeout (504) na porta ou erro rápido de rede, não cancelamos a tela, apenas repete o Check
+            setTimeout(checkStatus, 3000);
+          }
+        };
 
-        throw new Error("Processo terminou, porém sem relatório.");
+        // Inicia a verificação de status repetitiva
+        setTimeout(checkStatus, 3000);
 
       } catch (e) {
         overlay.classList.add("hidden");
