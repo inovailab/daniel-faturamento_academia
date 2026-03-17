@@ -18,8 +18,8 @@ python --version >> "$LOG"
 
 cd /home/felipe/daniel-faturamento_academia || exit 1
 
-echo "[DEBUG] Rodando click_automatico.py..." >> "$LOG"
-python -u click_automatico.py >> "$LOG" 2>&1
+echo "[DEBUG] Rodando a inteligência em modo direto..." >> "$LOG"
+python -u run_rpa_direto.py >> "$LOG" 2>&1
 
-echo "✅ Script completo finalizado com sucesso." >> "$LOG"
+echo "✅ Script direto do RPA finalizado com sucesso." >> "$LOG"
 echo "[DEBUG] Finalizado run_click.sh $(date -u '+%Y-%m-%d %H:%M:%S')" >> "$LOG"
