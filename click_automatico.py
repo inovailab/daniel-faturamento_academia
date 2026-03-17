@@ -10,7 +10,8 @@ with sync_playwright() as p:
     page = browser.new_page()
 
     print("[1] Acessando página inicial...")
-    page.goto(URL, wait_until="domcontentloaded")
+    # Aumentando o timeout para dar tempo da VM carregar o dashboard
+    page.goto(URL, wait_until="domcontentloaded", timeout=60000)
 
     if page.locator("#username").count() > 0:
         print("[2] Fazendo login...")
