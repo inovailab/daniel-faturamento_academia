@@ -9,7 +9,6 @@ echo "[DEBUG] Iniciando run_click.sh $(date -u '+%Y-%m-%d %H:%M:%S')" >> "$LOG"
 # Ambiente básico para CRON
 export HOME=/home/felipe
 export PATH="/home/felipe/daniel-faturamento_academia/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
-export DISPLAY=:99
 export PLAYWRIGHT_BROWSERS_PATH="/home/felipe/.cache/ms-playwright"
 export HEADLESS=1
 

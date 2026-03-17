@@ -46,6 +46,10 @@ setup_rpa_monitor(
     transport=os.getenv("RPA_MONITOR_TRANSPORT"),
 )
 
+# [FIX] No modo Linux Headless, o rpa_log.screenshot usa internamente o pyautogui
+# O pyautogui exige monitor/display. Isso estava causando crash completo ao logar um erro de Timeout.
+rpa_log.screenshot = lambda *args, **kwargs: None
+
 HEADLESS = os.getenv("HEADLESS", "1").strip() != "0"
 DEBUG_LOGIN = os.getenv("W12_DEBUG_LOGIN", "0").strip() == "1"
 INVALIDOS_GLOBAIS = []
@@ -441,13 +445,13 @@ async def wait_for_login_fields(page, tenant: str, base_login_url: str, max_wait
 async def do_login(page, tenant: str, base_login_url: str, user: str, pwd: str) -> None:
     rpa_log.info(f"[INÍCIO] Processo de login (tenant={tenant})")
     log(f"Abrindo página de login (tenant={tenant})")
-    await page.goto(base_login_url, wait_until="domcontentloaded", timeout=20000)
+    await page.goto(base_login_url, wait_until="domcontentloaded", timeout=60000)
 
     stop_wd = asyncio.Event()
     wd_task = asyncio.create_task(tenant_watchdog(page, stop_wd, tenant))
 
     try:
-        email_input, pass_input = await wait_for_login_fields(page, tenant, base_login_url, max_wait_ms=15000)
+        email_input, pass_input = await wait_for_login_fields(page, tenant, base_login_url, max_wait_ms=45000)
         log("Página de login/autenticação detectada — campos visíveis")
 
         # Para o watchdog antes de preencher — evita reload que limpa campos
