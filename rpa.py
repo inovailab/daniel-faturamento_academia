@@ -443,16 +443,47 @@ async def wait_for_login_fields(page, tenant: str, base_login_url: str, max_wait
 # Etapas do fluxo
 # =========================
 async def do_login(page, tenant: str, base_login_url: str, user: str, pwd: str) -> None:
+    import random
     rpa_log.info(f"[INÍCIO] Processo de login (tenant={tenant})")
-    log(f"Abrindo página de login (tenant={tenant})")
-    # Trocado para wait_until="commit" que responde de imediato (pra não parecer travado), a próxima função wait_for_login_fields já aguarda os botões surgirem sozinhos
-    await page.goto(base_login_url, wait_until="commit", timeout=25000)
 
-    stop_wd = asyncio.Event()
-    wd_task = asyncio.create_task(tenant_watchdog(page, stop_wd, tenant))
+    # Tenta o login até 3 vezes antes de desistir (contorna bloqueios anti-bot intermitentes)
+    MAX_LOGIN_TENTATIVAS = 3
+    for tentativa_login in range(1, MAX_LOGIN_TENTATIVAS + 1):
+        log(f"Abrindo página de login (tenant={tenant}) — tentativa {tentativa_login}/{MAX_LOGIN_TENTATIVAS}")
+
+        # Espera aleatória antes de abrir a página (simula comportamento humano)
+        delay = random.uniform(1.5, 4.0)
+        log(f"Aguardando {delay:.1f}s antes de acessar o portal...")
+        await asyncio.sleep(delay)
+
+        await page.goto(base_login_url, wait_until="commit", timeout=25000)
+
+        stop_wd = asyncio.Event()
+        wd_task = asyncio.create_task(tenant_watchdog(page, stop_wd, tenant))
+
+        try:
+            email_input, pass_input = await wait_for_login_fields(page, tenant, base_login_url, max_wait_ms=30000)
+            break  # Campos encontrados, sai do loop de retry
+        except PlaywrightTimeout:
+            stop_wd.set()
+            try:
+                await wd_task
+            except Exception:
+                pass
+            if tentativa_login < MAX_LOGIN_TENTATIVAS:
+                espera_retry = random.uniform(5.0, 12.0)
+                log(f"⚠️ Tentativa {tentativa_login} falhou. Aguardando {espera_retry:.1f}s antes de tentar novamente...")
+                await asyncio.sleep(espera_retry)
+                # Recarrega a página antes da próxima tentativa
+                try:
+                    await page.reload(wait_until="commit", timeout=15000)
+                except Exception:
+                    pass
+                continue
+            else:
+                raise PlaywrightTimeout("Campos de login não ficaram visíveis a tempo após todas as tentativas.")
 
     try:
-        email_input, pass_input = await wait_for_login_fields(page, tenant, base_login_url, max_wait_ms=45000)
         log("Página de login/autenticação detectada — campos visíveis")
 
         # Para o watchdog antes de preencher — evita reload que limpa campos
@@ -762,13 +793,13 @@ async def abrir_menu_financeiro_e_ir_para_nfs(page) -> None:
 
 async def aplicar_data_ontem(page) -> None:
     global DATA_FILTRO_ATUAL
-    
-    # ⚠️ FILTRO DE TESTE DA DATA — Mude para False para voltar ao comportamento de "Ontem"
-    TESTE_DATA_09_MARCO = False
 
-    if TESTE_DATA_09_MARCO:
-        DATA_FILTRO_ATUAL = "09/03/2026"
-        log(f"Aplicando filtro de data [TESTE]: {DATA_FILTRO_ATUAL}")
+    # ⚠️ DATA MANUAL: defina aqui a data desejada (formato DD/MM/AAAA) ou deixe vazio "" para usar "Ontem"
+    DATA_FILTRO_MANUAL = ""
+
+    if DATA_FILTRO_MANUAL:
+        DATA_FILTRO_ATUAL = DATA_FILTRO_MANUAL
+        log(f"Aplicando filtro de data [MANUAL]: {DATA_FILTRO_ATUAL}")
 
         # 1️⃣ Abre o dropdown de filtros (Filtro por período)
         btn_data = page.locator("button[data-cy='EFD-DatePickerBTN']").first
@@ -783,13 +814,14 @@ async def aplicar_data_ontem(page) -> None:
         await asyncio.sleep(0.4)
         log("Campo de data clicado (EFD-FormInput-00) para abrir calendário")
 
-        # 3️⃣ Clica no dia 9 duas vezes (para intervalo Início=9 e Fim=9)
-        dia = page.get_by_role("gridcell", name="9").first
+        # 3️⃣ Extrai o dia da data manual e clica nele duas vezes (início=dia e fim=dia)
+        dia_num = DATA_FILTRO_MANUAL.split("/")[0].lstrip("0")  # ex: "17/03/2026" → "17"
+        dia = page.get_by_role("gridcell", name=dia_num).first
         await dia.wait_for(state="visible", timeout=DEFAULT_TIMEOUT)
         await dia.click()
         await asyncio.sleep(0.3)
         await dia.click()
-        log("Dia 9 selecionado (clique duplo) no calendário")
+        log(f"Dia {dia_num} selecionado (clique duplo) no calendário")
 
     else:
         log("Aplicando filtro de data: opção 'Ontem'")
@@ -807,7 +839,7 @@ async def aplicar_data_ontem(page) -> None:
             await ontem.click()
         except:
             await ontem.click(force=True)
-            
+
         hoje = datetime.now()
         dt_ontem = hoje - timedelta(days=1)
         DATA_FILTRO_ATUAL = dt_ontem.strftime("%d/%m/%Y")
@@ -2003,6 +2035,8 @@ async def _run(callback_fim) -> None:
     for i, u in enumerate(urls, 1):
         log(f"  {i}. {u}")
 
+    tenants_com_erro = []  # rastreia tenants que falharam completamente
+
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=HEADLESS, args=["--start-maximized"])
         try:
@@ -2092,6 +2126,8 @@ async def _run(callback_fim) -> None:
                         log(f"Screenshot salvo: {img}")
                     except Exception as se:
                         log(f"Falha ao salvar screenshot (tenant={tenant}): {se}")
+                    # Marca esse tenant como falho
+                    tenants_com_erro.append(tenant)
                     continue
 
                 finally:
@@ -2106,39 +2142,42 @@ async def _run(callback_fim) -> None:
         finally:
             try:
                 # ============================================================
-                # ENVIO DO ÚNICO E-MAIL FINAL
+                # ENVIO DO ÚNICO E-MAIL FINAL com status correto
                 # ============================================================
-                if INVALIDOS_GLOBAIS:
+                # Se TODOS os tenants falharam (nenhuma unidade processada)
+                tudo_falhou = len(tenants_com_erro) > 0 and len(tenants_com_erro) == len(urls)
+
+                if tudo_falhou:
+                    payload = {
+                        "timestamp": int(datetime.now().timestamp()),
+                        "total_invalidos": 0,
+                        "invalidos": [],
+                        "sucesso": False,
+                        "erro": f"Falha total no processamento. Tenants com erro: {', '.join(tenants_com_erro)}",
+                    }
+                    log(f"⚠️ ATENÇÃO: todos os tenants falharam! Nenhuma unidade foi processada!")
+                elif INVALIDOS_GLOBAIS:
                     payload = {
                         "timestamp": int(datetime.now().timestamp()),
                         "total_invalidos": len(INVALIDOS_GLOBAIS),
                         "invalidos": INVALIDOS_GLOBAIS,
                         "sucesso": False,
                     }
-                    enviar_email_json_cadastro_invalido(payload)
                 else:
-                    # Processo concluído sem nenhuma falha
                     payload = {
                         "timestamp": int(datetime.now().timestamp()),
                         "total_invalidos": 0,
                         "invalidos": [],
                         "sucesso": True,
                     }
-                    enviar_email_json_cadastro_invalido(payload)
 
-                rpa_log.info("[FIM] Execução do RPA de Faturamento Academia concluída com sucesso")
-                
-                # Chama o callback **uma única vez**
+                enviar_email_json_cadastro_invalido(payload)
+                rpa_log.info("[FIM] Execução do RPA de Faturamento Academia concluída")
                 callback_fim()
-
                 await browser.close()
 
             except Exception as e:
                 rpa_log.error("Erro durante finalização do RPA", exc=e)
-                rpa_log.screenshot(
-                    filename=f"finalizacao_error_{int(time.time())}.png",
-                    regiao="finalizacao_rpa"
-                )
                 callback_fim()
                 pass
 
