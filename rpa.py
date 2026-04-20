@@ -938,7 +938,7 @@ async def exibir_por_data_vencimento(page) -> None:
 # === Tributação — marcar TODOS e DESMARCAR QUALQUER “Não usar - …” ===
 async def aplicar_filtro_tributacao(page) -> None:
     log("Abrindo + FILTROS")
-    btn_mais_filtros = page.get_by_role("button", name=re.compile(r"\+\s*FILTROS", re.IGNORECASE)).first
+    btn_mais_filtros = page.get_by_role("button", name=re.compile(r"\+\s*FILTROS?", re.IGNORECASE)).first
     await btn_mais_filtros.wait_for(state="visible", timeout=DEFAULT_TIMEOUT)
     try:
         await btn_mais_filtros.click()
@@ -1989,7 +1989,9 @@ async def run_for_tenant(page, tenant: str, base_login_url: str, user: str, pwd:
                         filename=f"erro_{nome_sanitizado}_{ts}.png",
                         regiao=f"erro_unidade_{nome_sanitizado}"
                     )
-                    log(f"Erro no fluxo ({nome}). Screenshot: {img}")
+                    log(f"Erro no fluxo ({nome}): {str(e)}\nScreenshot: {img}")
+                    import traceback
+                    traceback.print_exc()
                 except Exception as se:
                     log(f"Falha ao salvar screenshot ({nome}): {se}")
                 continue
