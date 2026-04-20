@@ -14,7 +14,7 @@ touch "$LOG_FILE"
 echo "🕐 Iniciando serviço cron..."
 service cron start
 
-echo "✅ Cron rodando. Próxima execução RPA: 11h BRT (14h UTC) todos os dias."
+echo "✅ Cron rodando. Próxima execução RPA: 08h BRT (11h UTC) todos os dias."
 echo "   Para ver logs: docker logs <container> -f  OU  tail -f $LOG_FILE"
 echo ""
 

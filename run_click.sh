@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 
-LOG="/app/cron_rpa.log"
+LOG="/opt/app/daniel-faturamento_academia/cron_rpa.log"
 
 echo "========================================" >> "$LOG"
 echo "[DEBUG] Iniciando run_click.sh $(date -u '+%Y-%m-%d %H:%M:%S')" >> "$LOG"

@@ -42,15 +42,15 @@ ENV PLAYWRIGHT_BROWSERS_PATH=/root/.cache/ms-playwright
 ENV HEADLESS=1
 ENV PYTHONUNBUFFERED=1
 
-# ── Cron job: 11h BRT = 14h UTC ─────────────────────────────────
+# ── Cron job: 8h BRT = 11h UTC ─────────────────────────────────
 RUN echo "SHELL=/bin/bash" > /etc/cron.d/rpa_faturamento && \
     echo "PATH=/opt/app/daniel-faturamento_academia/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" >> /etc/cron.d/rpa_faturamento && \
     echo "HOME=/root" >> /etc/cron.d/rpa_faturamento && \
     echo "PLAYWRIGHT_BROWSERS_PATH=/root/.cache/ms-playwright" >> /etc/cron.d/rpa_faturamento && \
     echo "HEADLESS=1" >> /etc/cron.d/rpa_faturamento && \
     echo "" >> /etc/cron.d/rpa_faturamento && \
-    echo "# RPA faturamento: todo dia às 11h BRT (14h UTC)" >> /etc/cron.d/rpa_faturamento && \
-    echo "0 14 * * * root bash /opt/app/daniel-faturamento_academia/run_click.sh >> /opt/app/daniel-faturamento_academia/cron_rpa.log 2>&1" >> /etc/cron.d/rpa_faturamento && \
+    echo "# RPA faturamento: todo dia às 08h BRT (11h UTC)" >> /etc/cron.d/rpa_faturamento && \
+    echo "0 11 * * * root bash /opt/app/daniel-faturamento_academia/run_click.sh >> /opt/app/daniel-faturamento_academia/cron_rpa.log 2>&1" >> /etc/cron.d/rpa_faturamento && \
     chmod 644 /etc/cron.d/rpa_faturamento && \
     crontab /etc/cron.d/rpa_faturamento
 
