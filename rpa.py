@@ -269,6 +269,7 @@ NAO_USAR_ANY = re.compile(r"^\s*Não\s*usar\s*(?:-\s*\d+(?:\.\d+)*)?\s*$", re.IG
 
 # Data do filtro (armazenada para repetir no modal de envio)
 DATA_FILTRO_ATUAL = ""
+DATA_FILTRO_MANUAL = ""
 
 # =========================
 # Utilidades
@@ -792,10 +793,7 @@ async def abrir_menu_financeiro_e_ir_para_nfs(page) -> None:
 
 
 async def aplicar_data_ontem(page) -> None:
-    global DATA_FILTRO_ATUAL
-
-    # ⚠️ DATA MANUAL: defina aqui a data desejada (formato DD/MM/AAAA) ou deixe vazio "" para usar "Ontem"
-    DATA_FILTRO_MANUAL = ""
+    global DATA_FILTRO_ATUAL, DATA_FILTRO_MANUAL
 
     if DATA_FILTRO_MANUAL:
         DATA_FILTRO_ATUAL = DATA_FILTRO_MANUAL
@@ -816,7 +814,13 @@ async def aplicar_data_ontem(page) -> None:
 
         # 3️⃣ Extrai o dia da data manual e clica nele duas vezes (início=dia e fim=dia)
         dia_num = DATA_FILTRO_MANUAL.split("/")[0].lstrip("0")  # ex: "17/03/2026" → "17"
-        dia = page.get_by_role("gridcell", name=dia_num).first
+        
+        # Filtra pela classe exata da célula do calendário do Angular Material para evitar match parcial com o ano (ex: "2026" matricular no dia 1)
+        dia = page.locator("td.mat-calendar-body-cell").filter(has_text=re.compile(fr"^\s*{dia_num}\s*$")).first
+        if not await dia.count():
+            # Tenta um fallback com get_by_text
+            dia = page.get_by_text(dia_num, exact=True).first
+
         await dia.wait_for(state="visible", timeout=DEFAULT_TIMEOUT)
         await dia.click()
         await asyncio.sleep(0.3)
@@ -1127,6 +1131,15 @@ async def confirmar_envio_nf(page) -> None:
         await click_with_retries(fechar_btn, "Botão FECHAR", attempts=3, timeout=DEFAULT_TIMEOUT)
     except Exception:
         log("⚠ Botão FECHAR não apareceu (ou já fechou direto).")
+
+    log("Verificando se o modal de aviso (OK) apareceu...")
+    try:
+        ok_btn = page.locator("button", has_text=re.compile(r"^\s*OK\s*$", re.IGNORECASE)).first
+        await ok_btn.wait_for(state="visible", timeout=3000)
+        await click_with_retries(ok_btn, "Botão OK", attempts=2, timeout=2000)
+        log("Botão OK do modal de aviso clicado com sucesso.")
+    except Exception:
+        log("Modal com botão OK não apareceu (ou já sumiu). Seguindo...")
 
     # Garante que não sobrou nenhum mat-dialog-container na tela (Força o fechamento via Escape)
     try:
@@ -1972,6 +1985,9 @@ async def run_for_tenant(page, tenant: str, base_login_url: str, user: str, pwd:
         # ⚠️ FILTRO DE TESTE — coloque None para rodar todos os shoppings
         TESTAR_APENAS = None
 
+        global DATA_FILTRO_MANUAL
+        DATA_FILTRO_MANUAL = ""
+
         for nome, termos, rx in unidades_bt:
             if TESTAR_APENAS and TESTAR_APENAS.lower() not in nome.lower():
                 log(f"[TESTE] Pulando unidade: {nome}")
@@ -2137,10 +2153,10 @@ async def _run(callback_fim) -> None:
                         await context.close()
                     except:
                         pass
-
+    
             log("Pausa final de 5 segundos para inspeção")
             await asyncio.sleep(5)
-
+    
         finally:
             try:
                 # ============================================================

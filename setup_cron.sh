@@ -19,13 +19,13 @@ echo "🔒 Garantindo permissão de execução no run_click.sh..."
 chmod +x "$SCRIPT"
 
 # ---------------------------------------------------------------
-# Cron: 08h00 horário de Brasília (BRT = UTC-3 → 11:00 UTC)
+# Cron: 09h00 horário de Brasília (BRT = UTC-3 → 12:00 UTC)
 # ---------------------------------------------------------------
-CRON_JOB="0 11 * * * root bash $SCRIPT >> $LOG_FILE 2>&1"
+CRON_JOB="0 12 * * * root bash $SCRIPT >> $LOG_FILE 2>&1"
 
 echo "📝 Registrando cron em /etc/cron.d/rpa_faturamento..."
 cat > /etc/cron.d/rpa_faturamento <<EOF
-# Roda o RPA de faturamento todos os dias às 08h BRT (11h UTC)
+# Roda o RPA de faturamento todos os dias às 09h BRT (12h UTC)
 SHELL=/bin/bash
 PATH=/opt/app/daniel-faturamento_academia/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 HOME=/root

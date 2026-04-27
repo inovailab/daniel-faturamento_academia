@@ -49,8 +49,8 @@ RUN echo "SHELL=/bin/bash" > /etc/cron.d/rpa_faturamento && \
     echo "PLAYWRIGHT_BROWSERS_PATH=/root/.cache/ms-playwright" >> /etc/cron.d/rpa_faturamento && \
     echo "HEADLESS=1" >> /etc/cron.d/rpa_faturamento && \
     echo "" >> /etc/cron.d/rpa_faturamento && \
-    echo "# RPA faturamento: todo dia às 08h BRT (11h UTC)" >> /etc/cron.d/rpa_faturamento && \
-    echo "0 11 * * * root bash /opt/app/daniel-faturamento_academia/run_click.sh >> /opt/app/daniel-faturamento_academia/cron_rpa.log 2>&1" >> /etc/cron.d/rpa_faturamento && \
+    echo "# RPA faturamento: todo dia às 09h BRT (12h UTC)" >> /etc/cron.d/rpa_faturamento && \
+    echo "0 12 * * * root bash /opt/app/daniel-faturamento_academia/run_click.sh >> /opt/app/daniel-faturamento_academia/cron_rpa.log 2>&1" >> /etc/cron.d/rpa_faturamento && \
     chmod 644 /etc/cron.d/rpa_faturamento && \
     crontab /etc/cron.d/rpa_faturamento
 
