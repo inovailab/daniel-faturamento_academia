@@ -100,6 +100,8 @@ def enviar_email_json_cadastro_invalido(payload: dict) -> None:
     - com inválidos              → lista deduplificada por (cliente+unidade)
                                    com apenas: cliente, cpf, cadastro, detalhes, unidade
     """
+    log("[TESTE] Envio de e-mail desativado para testes.")
+    return
 
     if gmail_service is None:
         log("Gmail API não inicializada; e-mail NÃO enviado.")
@@ -941,50 +943,95 @@ async def exibir_por_data_vencimento(page) -> None:
 
 # === Tributação — marcar TODOS e DESMARCAR QUALQUER “Não usar - …” ===
 async def aplicar_filtro_tributacao(page) -> None:
-    log("Abrindo + FILTROS")
-    btn_mais_filtros = page.get_by_role("button", name=re.compile(r"\+\s*FILTROS?", re.IGNORECASE)).first
-    await btn_mais_filtros.wait_for(state="visible", timeout=DEFAULT_TIMEOUT)
-    try:
-        await btn_mais_filtros.click()
-    except Exception:
-        await btn_mais_filtros.click(force=True)
+    # Tenta achar o botão/chip da Tributação na página principal (se já estiver ativo)
+    btn_tributacao = page.locator("button, [role='button'], .simula-mat-menu, mat-chip", has_text=re.compile(r"Tributação", re.IGNORECASE)).first
+    
+    # Se o chip de Tributação não estiver visível na página principal, precisamos abrir "+ FILTROS"
+    if not await btn_tributacao.is_visible():
+        log("Tributação não está visível como chip. Abrindo + FILTROS...")
+        btn_mais_filtros = page.get_by_role("button", name=re.compile(r"\+\s*FILTROS?", re.IGNORECASE)).first
+        await btn_mais_filtros.wait_for(state="visible", timeout=DEFAULT_TIMEOUT)
+        try:
+            await btn_mais_filtros.click()
+        except Exception:
+            await btn_mais_filtros.click(force=True)
+            
+        # Agora o botão dentro do menu de filtros deve estar visível
+        btn_tributacao = page.locator("button.simula-mat-menu", has_text=re.compile(r"^\s*Tributação\s*$", re.IGNORECASE)).first
+        await btn_tributacao.wait_for(state="visible", timeout=DEFAULT_TIMEOUT)
 
     log("Abrindo Tributação")
-    btn_tributacao = page.locator("button.simula-mat-menu", has_text=re.compile(r"^\s*Tributação\s*$", re.IGNORECASE)).first
-    await btn_tributacao.wait_for(state="visible", timeout=DEFAULT_TIMEOUT)
-    await btn_tributacao.click()
+    try:
+        await btn_tributacao.click(timeout=DEFAULT_TIMEOUT)
+    except Exception as e:
+        log(f"Falha ao clicar em Tributação: {e}")
+        await btn_tributacao.click(force=True, timeout=DEFAULT_TIMEOUT)
 
+    log("Aguardando painel de Tributação ficar visível")
     pane = page.locator("div.cdk-overlay-pane").filter(
-        has_not=page.locator(".cdk-overlay-pane[aria-hidden='true']")
+        has=page.locator("input[placeholder*='Pesquisar' i], mat-option, mat-list-option, mat-checkbox")
     ).last
     await pane.wait_for(state="visible", timeout=DEFAULT_TIMEOUT)
 
-    # 1) 'Todos'
+    # 1) marcar todos os checks, EXCETO "Todos" ou os que contêm "12.34"
+    checkboxes = pane.locator("mat-list-option, mat-option, mat-checkbox, [role='option'], [role='checkbox']")
+    
+    # Aguarda a primeira opção carregar e ficar visível para evitar race condition
     try:
-        todos = pane.get_by_text(re.compile(r"^\s*Todos\s*$", re.IGNORECASE)).first
-        await todos.wait_for(state="visible", timeout=DEFAULT_TIMEOUT)
-        await todos.click()
-    except Exception:
-        pass
+        await checkboxes.first.wait_for(state="visible", timeout=DEFAULT_TIMEOUT)
+    except Exception as e:
+        log(f"Erro ao aguardar opções do filtro de Tributação: {e}")
 
-    # 2) desmarcar todos os "Não usar - ..." visíveis (sem scroll)
-    matches = pane.get_by_text(NAO_USAR_ANY)
-    count = await matches.count()
+    count = await checkboxes.count()
+    log(f"Tributação: encontradas {count} opções no painel")
     for i in range(count):
-        handle = matches.nth(i)
+        cb = checkboxes.nth(i)
         try:
-            text = (await handle.inner_text()).strip()
+            text = (await cb.inner_text()).strip()
         except Exception:
-            text = f"Não usar (idx {i})"
-        try:
-            await handle.click()
-            log(f"Tributação: desmarcado '{text}'")
-        except Exception:
-            try:
-                await handle.click(force=True)
-                log(f"Tributação: desmarcado '{text}' (force)")
-            except Exception:
-                log(f"Tributação: falha ao desmarcar '{text}'")
+            continue
+        
+        is_todos = "todos" in text.lower()
+        is_1234 = "12.34" in text
+        
+        is_excluido = is_todos or is_1234
+        
+        classes = await cb.get_attribute("class") or ""
+        aria_checked = await cb.get_attribute("aria-checked") or ""
+        aria_selected = await cb.get_attribute("aria-selected") or ""
+        
+        is_checked = (
+            "mat-checkbox-checked" in classes or 
+            "mat-selected" in classes or 
+            "mat-option-selected" in classes or 
+            aria_checked == "true" or 
+            aria_selected == "true"
+        )
+
+        if is_excluido:
+            # Deve ficar desmarcado
+            if is_checked:
+                try:
+                    await cb.click()
+                    log(f"Tributação: desmarcado '{text}'")
+                except Exception:
+                    try:
+                        await cb.click(force=True)
+                        log(f"Tributação: desmarcado '{text}' (force)")
+                    except Exception:
+                        log(f"Tributação: falha ao desmarcar '{text}'")
+        else:
+            # Deve ficar marcado
+            if not is_checked:
+                try:
+                    await cb.click()
+                    log(f"Tributação: marcado '{text}'")
+                except Exception:
+                    try:
+                        await cb.click(force=True)
+                        log(f"Tributação: marcado '{text}' (force)")
+                    except Exception:
+                        log(f"Tributação: falha ao marcar '{text}'")
 
     # 3) aplicar
     aplicar = page.locator("button[data-cy='AplicarFiltro'], button#btn", has_text=re.compile(r"Aplicar", re.IGNORECASE)).first
