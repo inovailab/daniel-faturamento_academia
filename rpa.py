@@ -100,8 +100,7 @@ def enviar_email_json_cadastro_invalido(payload: dict) -> None:
     - com inválidos              → lista deduplificada por (cliente+unidade)
                                    com apenas: cliente, cpf, cadastro, detalhes, unidade
     """
-    log("[TESTE] Envio de e-mail desativado para testes.")
-    return
+    log("Iniciando envio de e-mail final...")
 
     if gmail_service is None:
         log("Gmail API não inicializada; e-mail NÃO enviado.")
