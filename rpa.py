@@ -270,7 +270,7 @@ NAO_USAR_ANY = re.compile(r"^\s*Não\s*usar\s*(?:-\s*\d+(?:\.\d+)*)?\s*$", re.IG
 
 # Data do filtro (armazenada para repetir no modal de envio)
 DATA_FILTRO_ATUAL = ""
-DATA_FILTRO_MANUAL = ""
+DATA_FILTRO_MANUAL = os.getenv("DATA_FILTRO_MANUAL", "")
 
 # =========================
 # Utilidades
@@ -1095,7 +1095,7 @@ async def selecionar_data_ontem_modal(page) -> None:
     global DATA_FILTRO_ATUAL
     if not DATA_FILTRO_ATUAL:
         # Fallback de segurança caso não exista por algum motivo bizarro
-        DATA_FILTRO_ATUAL = (datetime.now() - timedelta(days=1)).strftime("%d/%m/%Y")
+        DATA_FILTRO_ATUAL = os.getenv("DATA_FILTRO_MANUAL") or (datetime.now() - timedelta(days=1)).strftime("%d/%m/%Y")
 
     log(f"Preenchendo no modal a mesma data do filtro: {DATA_FILTRO_ATUAL}")
 
@@ -2032,7 +2032,7 @@ async def run_for_tenant(page, tenant: str, base_login_url: str, user: str, pwd:
         TESTAR_APENAS = None
 
         global DATA_FILTRO_MANUAL
-        DATA_FILTRO_MANUAL = ""
+        DATA_FILTRO_MANUAL = os.getenv("DATA_FILTRO_MANUAL", "")
 
         for nome, termos, rx in unidades_bt:
             if TESTAR_APENAS and TESTAR_APENAS.lower() not in nome.lower():
@@ -2086,6 +2086,14 @@ async def definir_itens_por_pagina(page, qtd: int = 100) -> None:
 # Runner principal (contexto novo por tenant + pausa/fechar após bodytech)
 # =========================
 async def _run(callback_fim) -> None:
+    global HEADLESS, DEBUG_LOGIN, DATA_FILTRO_MANUAL
+    
+    # Reload .env at runtime to get the latest variables (especially manually configured date)
+    load_dotenv(override=True)
+    
+    HEADLESS = os.getenv("HEADLESS", "1").strip() != "0"
+    DEBUG_LOGIN = os.getenv("W12_DEBUG_LOGIN", "0").strip() == "1"
+    DATA_FILTRO_MANUAL = os.getenv("DATA_FILTRO_MANUAL", "")
     
     rpa_log.info("[INÍCIO] Execução do RPA de Faturamento Academia")
     
@@ -2094,7 +2102,7 @@ async def _run(callback_fim) -> None:
     if not urls:
         raise RuntimeError("Nenhuma EVO_URL encontrada no ambiente.")
 
-    log(f"HEADLESS={'1' if HEADLESS else '0'} | DEBUG_LOGIN={'1' if DEBUG_LOGIN else '0'}")
+    log(f"HEADLESS={'1' if HEADLESS else '0'} | DEBUG_LOGIN={'1' if DEBUG_LOGIN else '0'} | DATA_FILTRO_MANUAL='{DATA_FILTRO_MANUAL}'")
     log("Ordem de execução:")
     for i, u in enumerate(urls, 1):
         log(f"  {i}. {u}")
