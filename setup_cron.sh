@@ -22,18 +22,18 @@ chmod +x "$SCRIPT"
 # Cron: 11h00 horário de Brasília (BRT = UTC-3 → 14:00 UTC)
 # Ignora o dia 04/07/2026 (amanhã)
 # ---------------------------------------------------------------
-CRON_JOB="0 14 * * * root [ \\\$(date +\\%Y-\\%m-\\%d) != '2026-07-04' ] && bash $SCRIPT >> $LOG_FILE 2>&1"
 
 echo "📝 Registrando cron em /etc/cron.d/rpa_faturamento..."
 cat > /etc/cron.d/rpa_faturamento <<EOF
 # Roda o RPA de faturamento todos os dias às 11h BRT (14h UTC)
+# Ignora o dia 04/07/2026 (amanhã)
 SHELL=/bin/bash
 PATH=/opt/app/daniel-faturamento_academia/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 HOME=/root
 PLAYWRIGHT_BROWSERS_PATH=/root/.cache/ms-playwright
 HEADLESS=1
 
-$CRON_JOB
+0 14 * * * root [ \$(date +\%Y-\%m-\%d) != '2026-07-04' ] && bash $SCRIPT >> $LOG_FILE 2>&1
 EOF
 
 chmod 644 /etc/cron.d/rpa_faturamento

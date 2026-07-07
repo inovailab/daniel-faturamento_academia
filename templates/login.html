@@ -1,134 +1,67 @@
-<!-- filename: templates/login.html -->
-<!doctype html>
+<!DOCTYPE html>
 <html lang="pt-BR">
 <head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Entrar no Sistema</title>
-  <style>
-    :root {
-      --bg: #0f172a;
-      --card: #1e293b;
-      --text: #f1f5f9;
-      --muted: #94a3b8;
-      --primary: #6366f1;
-      --primary-hover: #4f46e5;
-      --border: #334155;
-      --shadow: rgba(0,0,0,0.5);
-    }
-
-    body {
-      margin: 0;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      min-height: 100vh;
-      background: var(--bg);
-      color: var(--text);
-      font-family: 'Inter', system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, Noto Sans, Arial;
-    }
-
-    .card {
-      background: var(--card);
-      border: 1px solid var(--border);
-      padding: 28px;
-      border-radius: 16px;
-      width: 380px;
-      box-shadow: 0 8px 32px var(--shadow);
-      backdrop-filter: blur(8px);
-      animation: fadeIn 0.6s ease;
-    }
-
-    .title {
-      font-weight: 700;
-      margin-bottom: 16px;
-      text-align: center;
-      font-size: 1.4rem;
-      color: var(--primary);
-    }
-
-    label {
-      display: block;
-      font-size: 0.9rem;
-      color: var(--muted);
-      margin-bottom: 4px;
-    }
-
-    input {
-      width: 100%;
-      padding: 12px;
-      border: 1px solid var(--border);
-      border-radius: 8px;
-      margin-bottom: 14px;
-      background: #0f172a;
-      color: var(--text);
-      font-size: 1rem;
-    }
-
-    input:focus {
-      border-color: var(--primary);
-      outline: none;
-      box-shadow: 0 0 0 2px rgba(99,102,241,0.4);
-    }
-
-    button {
-      width: 100%;
-      padding: 12px;
-      border: 0;
-      background: var(--primary);
-      color: #fff;
-      border-radius: 8px;
-      font-weight: 600;
-      cursor: pointer;
-      transition: background 0.2s ease, transform 0.15s ease;
-    }
-
-    button:hover {
-      background: var(--primary-hover);
-      transform: scale(1.02);
-    }
-
-    .hint {
-      font-size: 0.875rem;
-      color: var(--muted);
-      margin-top: 10px;
-      text-align: center;
-    }
-
-    .hint strong {
-      color: var(--text);
-    }
-
-    .flash {
-      background: #1e293b;
-      border: 1px solid #475569;
-      padding: 10px 12px;
-      border-radius: 8px;
-      margin-top: 12px;
-      text-align: center;
-      color: #f87171;
-    }
-
-    @keyframes fadeIn {
-      from { opacity: 0; transform: translateY(15px); }
-      to { opacity: 1; transform: translateY(0); }
-    }
-  </style>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Entrar | Faturamento de Academia</title>
+    <!-- Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+    <!-- Lucide Icons -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <!-- Custom CSS -->
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
 </head>
-<body>
-  <div class="card">
-    <div class="title">Bem-vindo(a)</div>
-    <form action="{{ url_for('login') }}" method="post">
-      <label for="username">Usuário</label>
-      <input id="username" name="username" type="text" required>
-      <label for="password">Senha</label>
-      <input id="password" name="password" type="password" required>
-      <button type="submit">Entrar</button>
-    </form>
-    <div class="hint">Use: usuário <strong>admin</strong> e senha <strong>admin١٢٣</strong>.</div>
-    {% for m in get_flashed_messages() %}
-    <div class="flash">{{ m }}</div>
-    {% endfor %}
-  </div>
+<body class="login-body">
+    <div class="bg-glow"></div>
+    <div class="bg-glow bg-glow-2"></div>
+
+    <div class="login-wrapper">
+        <div class="login-card glass-panel">
+            <div class="login-header">
+                <div class="logo-icon">
+                    <i data-lucide="check-square" class="icon-accent"></i>
+                </div>
+                <h2>Faturamento de <span>Academia</span></h2>
+                <p>Identificação de CPFs e conciliação de faturamentos</p>
+            </div>
+
+            {% for m in get_flashed_messages() %}
+            <div class="login-error-alert">
+                <i data-lucide="alert-triangle"></i>
+                <span>{{ m }}</span>
+            </div>
+            {% endfor %}
+
+            <form action="{{ url_for('login') }}" method="POST" class="login-form">
+                <div class="form-group">
+                    <label for="username">Usuário</label>
+                    <input type="text" id="username" name="username" placeholder="Digite seu usuário..." required autocomplete="username">
+                </div>
+
+                <div class="form-group">
+                    <label for="password">Senha</label>
+                    <input type="password" id="password" name="password" placeholder="Digite sua senha..." required autocomplete="current-password">
+                </div>
+
+                <button type="submit" class="btn btn-primary btn-block">
+                    <span>Entrar no Sistema</span>
+                    <i data-lucide="log-in"></i>
+                </button>
+            </form>
+
+            <div class="login-footer">
+                <p>Controle de Acesso Restrito</p>
+                <p style="margin-top: 0.5rem; font-size: 0.8rem; color: var(--text-muted);">
+                    Use: <strong>admin</strong> e senha <strong>admin١٢٣</strong>
+                </p>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        lucide.createIcons();
+    </script>
 </body>
 </html>

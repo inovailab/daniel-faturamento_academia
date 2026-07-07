@@ -9,6 +9,7 @@ Base = declarative_base()
 class User(Base):
     __tablename__ = 'usuarios'
     id = Column(Integer, primary_key=True)  # chave primária (١)
+    name = Column(String(150), nullable=True)
     username = Column(String(150), unique=True, nullable=False)
     password_hash = Column(String(255), nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow)

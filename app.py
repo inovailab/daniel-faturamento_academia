@@ -11,6 +11,9 @@ import json
 import uuid
 import platform
 
+import re
+import pandas as pd
+
 from flask import (
     Flask,
     request,
@@ -23,7 +26,7 @@ from flask import (
     jsonify,
     Blueprint,
 )
-from werkzeug.security import check_password_hash
+from werkzeug.security import check_password_hash, generate_password_hash
 from dotenv import load_dotenv
 
 from db import SessionLocal, init_db_and_seed_admin, get_paths
@@ -52,13 +55,84 @@ else:
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 # Inicializa app Flask
-app = Flask(__name__, template_folder="templates", static_folder=None)
+app = Flask(__name__, template_folder="templates")
 PROCESSO_TERMINOU = False
 
 def marcar_processo_finalizado():
     global PROCESSO_TERMINOU
     PROCESSO_TERMINOU = True
 app.config["SECRET_KEY"] = os.getenv("SECRET_KEY", "chave_secreta_para_sessao")
+
+# Configurações do Corretor de CPF (convertercpfsc)
+app.config['CPF_UPLOAD_FOLDER'] = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'uploads_cpf')
+app.config['CPF_PROCESSED_FOLDER'] = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'processed_cpf')
+app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB limit
+
+os.makedirs(app.config['CPF_UPLOAD_FOLDER'], exist_ok=True)
+os.makedirs(app.config['CPF_PROCESSED_FOLDER'], exist_ok=True)
+
+def find_cpf_column(df):
+    """
+    Search for a column that resembles CPF in the dataframe.
+    Returns the column name if found, else None.
+    """
+    patterns = [
+        r'^cpf$',
+        r'cpf',
+        r'cadastro.*pess.*fis',
+        r'c\.p\.f\.'
+    ]
+    
+    for col in df.columns:
+        col_str = str(col).strip().lower()
+        if col_str == 'cpf':
+            return col
+            
+    for pattern in patterns:
+        for col in df.columns:
+            if re.search(pattern, str(col).strip().lower()):
+                return col
+                
+    for col in df.columns:
+        non_null = df[col].dropna().head(10)
+        digit_ratios = []
+        for val in non_null:
+            val_str = str(val).strip()
+            if val_str.endswith('.0'):
+                val_str = val_str[:-2]
+            digits = "".join(filter(str.isdigit, val_str))
+            if len(digits) >= 8 and len(digits) <= 11:
+                digit_ratios.append(True)
+            else:
+                digit_ratios.append(False)
+        if len(digit_ratios) > 0 and sum(digit_ratios) / len(digit_ratios) > 0.7:
+            return col
+            
+    return None
+
+def format_cpf(val):
+    """
+    Pad CPF with leading zeros until it has 11 digits.
+    Returns: (formatted_val, was_changed)
+    """
+    if pd.isna(val) or val == "" or str(val).strip() == "":
+        return "", False
+        
+    val_str = str(val).strip()
+    
+    if val_str.endswith('.0'):
+        val_str = val_str[:-2]
+        
+    digits = "".join(filter(str.isdigit, val_str))
+    
+    if not digits:
+        return val_str, False
+        
+    if len(digits) < 11:
+        padded = digits.zfill(11)
+        return padded, True
+        
+    return digits, False
 
 # Inicializa DB e cria usuário admin caso não exista
 init_db_and_seed_admin()
@@ -217,6 +291,9 @@ def login():
             user = db.query(User).filter_by(username=uname).first()
             if user and check_password_hash(user.password_hash, pwd):
                 session["user"] = user.username
+                session["user_id"] = user.id
+                session["user_name"] = user.name or user.username
+                session["username"] = user.username
                 return redirect(url_for("dashboard"))
         flash("Credenciais inválidas.")
         return redirect(url_for("login"))
@@ -269,7 +346,7 @@ def start_rpa():
 @app.route("/report")
 @login_required
 def report():
-    return render_template("report.html")
+    return redirect(url_for("dashboard"))
 
 
 @app.post("/start_async")
@@ -358,6 +435,135 @@ def wait_finish():
 def uploaded_file(filename):
     return send_from_directory(UPLOAD_DIR, filename, as_attachment=True)
 
+
+@app.route('/upload', methods=['POST'])
+@login_required
+def upload_file():
+    if 'file' not in request.files:
+        return jsonify({'error': 'Nenhum arquivo enviado.'}), 400
+        
+    file = request.files['file']
+    if file.filename == '':
+        return jsonify({'error': 'Nenhum arquivo selecionado.'}), 400
+        
+    if not (file.filename.endswith('.xlsx') or file.filename.endswith('.xls') or file.filename.endswith('.csv')):
+        return jsonify({'error': 'Formato de arquivo inválido. Envie um arquivo Excel (.xlsx, .xls) ou CSV.'}), 400
+        
+    upload_path = None
+    try:
+        file_ext = os.path.splitext(file.filename)[1]
+        temp_filename = f"{uuid.uuid4()}{file_ext}"
+        upload_path = os.path.join(app.config['CPF_UPLOAD_FOLDER'], temp_filename)
+        file.save(upload_path)
+        
+        if file_ext in ['.xlsx', '.xls']:
+            df = pd.read_excel(upload_path, dtype=str)
+        else:
+            df = pd.read_csv(upload_path, dtype=str)
+            
+        cpf_col = find_cpf_column(df)
+        if cpf_col is None:
+            os.remove(upload_path)
+            return jsonify({'error': 'Não foi possível encontrar a coluna de CPF na planilha. Certifique-se de que a coluna está nomeada corretamente.'}), 400
+            
+        modified_count = 0
+        original_cpfs = df[cpf_col].tolist()
+        processed_cpfs = []
+        changed_indices = []
+        
+        for idx, val in enumerate(original_cpfs):
+            formatted, was_changed = format_cpf(val)
+            processed_cpfs.append(formatted)
+            if was_changed:
+                modified_count += 1
+                changed_indices.append(idx)
+                
+        df[cpf_col] = processed_cpfs
+        
+        processed_filename = f"CPF_Corrigido_{file.filename}"
+        processed_path = os.path.join(app.config['CPF_PROCESSED_FOLDER'], temp_filename)
+        
+        if file_ext in ['.xlsx', '.xls']:
+            df.to_excel(processed_path, index=False)
+        else:
+            df.to_csv(processed_path, index=False)
+            
+        preview_df = df.head(100).copy()
+        preview_data = []
+        columns = list(df.columns)
+        
+        for idx, row in preview_df.iterrows():
+            row_data = {}
+            for col in columns:
+                row_data[col] = str(row[col]) if not pd.isna(row[col]) else ""
+            
+            row_data['_is_cpf_modified'] = idx in changed_indices
+            if idx in changed_indices:
+                orig_val = original_cpfs[idx]
+                if isinstance(orig_val, str) and orig_val.endswith('.0'):
+                    orig_val = orig_val[:-2]
+                row_data['_original_cpf'] = str(orig_val) if not pd.isna(orig_val) else ""
+            
+            preview_data.append(row_data)
+            
+        os.remove(upload_path)
+        
+        return jsonify({
+            'success': True,
+            'filename': file.filename,
+            'total_rows': len(df),
+            'modified_count': modified_count,
+            'cpf_column': cpf_col,
+            'file_id': temp_filename,
+            'download_name': processed_filename,
+            'columns': columns,
+            'preview_data': preview_data
+        })
+        
+    except Exception as e:
+        if upload_path and os.path.exists(upload_path):
+            os.remove(upload_path)
+        return jsonify({'error': f'Erro ao processar o arquivo: {str(e)}'}), 500
+
+@app.route('/download/<file_id>')
+@login_required
+def download_file(file_id):
+    filename = request.args.get('name', 'planilha_corrigida.xlsx')
+    return send_from_directory(
+        app.config['CPF_PROCESSED_FOLDER'],
+        file_id,
+        as_attachment=True,
+        download_name=filename
+    )
+
+@app.route('/change_password', methods=['POST'])
+@login_required
+def change_password():
+    data = request.get_json()
+    if not data:
+        return jsonify({'error': 'Dados inválidos.'}), 400
+        
+    current_password = data.get('current_password', '')
+    new_password = data.get('new_password', '')
+    confirm_password = data.get('confirm_password', '')
+    
+    if not current_password or not new_password or not confirm_password:
+        return jsonify({'error': 'Todos os campos são obrigatórios.'}), 400
+        
+    if new_password != confirm_password:
+        return jsonify({'error': 'A nova senha e a confirmação de senha não coincidem.'}), 400
+        
+    username = session['user']
+    
+    with SessionLocal() as db:
+        user = db.query(User).filter_by(username=username).first()
+        if not user or not check_password_hash(user.password_hash, current_password):
+            return jsonify({'error': 'Senha atual incorreta.'}), 400
+            
+        user.password_hash = generate_password_hash(new_password)
+        db.commit()
+        
+    return jsonify({'success': True, 'message': 'Senha alterada com sucesso!'})
 
 # ===== Registra o Blueprint =====
 app.register_blueprint(bp)

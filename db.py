@@ -148,6 +148,16 @@ def init_db_and_seed_admin():
     with SessionLocal() as db:
         admin = db.query(User).filter_by(username='admin').first()
         if not admin:
-            admin_user = User(username='admin', password_hash=generate_password_hash('admin123'))
+            admin_user = User(name='Admin', username='admin', password_hash=generate_password_hash('admin123'))
             db.add(admin_user)
-            db.commit()
+        else:
+            if not admin.name:
+                admin.name = 'Admin'
+        katia = db.query(User).filter_by(username='katia.canal').first()
+        if not katia:
+            katia_user = User(name='Katia Canal', username='katia.canal', password_hash=generate_password_hash('senha123'))
+            db.add(katia_user)
+        else:
+            if not katia.name:
+                katia.name = 'Katia Canal'
+        db.commit()
