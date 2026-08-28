@@ -7,6 +7,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Pattern, List, Tuple, Optional
 import unicodedata
+import urllib.parse
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from google.oauth2.credentials import Credentials
@@ -100,8 +101,6 @@ def enviar_email_json_cadastro_invalido(payload: dict) -> None:
     - com inválidos              → lista deduplificada por (cliente+unidade)
                                    com apenas: cliente, cpf, cadastro, detalhes, unidade
     """
-    log("Iniciando envio de e-mail final...")
-
     if gmail_service is None:
         log("Gmail API não inicializada; e-mail NÃO enviado.")
         return
@@ -116,7 +115,7 @@ def enviar_email_json_cadastro_invalido(payload: dict) -> None:
             assunto = f"EVO – Processo do dia {hoje_str} finalizado com sucesso ✅"
             corpo   = f"Processo do dia {hoje_str} finalizado com sucesso sem cadastros inválidos ✅"
 
-        else:
+        elif invalidos:
             # ── E-mail com inválidos ────────────────────────────────────────
             assunto = f"EVO – Cadastros inválidos não corrigidos – {hoje_str}"
 
@@ -148,6 +147,10 @@ def enviar_email_json_cadastro_invalido(payload: dict) -> None:
                 partes.append(json.dumps(resumo, ensure_ascii=False, indent=2))
 
             corpo = frase + "\n\n".join(partes)
+        else:
+            # Se não houve sucesso e nem há inválidos gravados, não envia e-mail falso de 0 cadastros
+            log("Nenhum cadastro inválido a notificar e processo não concluído com sucesso total. E-mail omitido.")
+            return
 
         # Monta e envia o e-mail
         msg = MIMEMultipart('alternative')
@@ -271,6 +274,37 @@ NAO_USAR_ANY = re.compile(r"^\s*Não\s*usar\s*(?:-\s*\d+(?:\.\d+)*)?\s*$", re.IG
 # Data do filtro (armazenada para repetir no modal de envio)
 DATA_FILTRO_ATUAL = ""
 DATA_FILTRO_MANUAL = os.getenv("DATA_FILTRO_MANUAL", "")
+DATA_INICIAL = os.getenv("DATA_INICIAL", "")
+DATA_FINAL = os.getenv("DATA_FINAL", "")
+
+def obter_datas_filtro() -> Tuple[str, str]:
+    """
+    Retorna (data_inicial, data_final) em formato DD/MM/YYYY.
+    Busca por DATA_INICIAL, DATA_FINAL e DATA_FILTRO_MANUAL no ambiente.
+    Se nenhuma estiver definida, retorna o dia de ontem para ambas.
+    """
+    dt_ini = os.getenv("DATA_INICIAL", "").strip()
+    dt_fim = os.getenv("DATA_FINAL", "").strip()
+    manual = os.getenv("DATA_FILTRO_MANUAL", "").strip()
+
+    if not dt_ini and not dt_fim and manual:
+        parts = re.split(r"\s+(?:a|até|-)\s+", manual, flags=re.IGNORECASE)
+        if len(parts) == 2:
+            dt_ini, dt_fim = parts[0].strip(), parts[1].strip()
+        else:
+            dt_ini = dt_fim = manual.strip()
+
+    if not dt_ini and not dt_fim:
+        dt_ontem = (datetime.now() - timedelta(days=1)).strftime("%d/%m/%Y")
+        return dt_ontem, dt_ontem
+
+    if not dt_ini:
+        dt_ini = dt_fim
+    if not dt_fim:
+        dt_fim = dt_ini
+
+    return dt_ini, dt_fim
+
 
 # =========================
 # Utilidades
@@ -429,7 +463,7 @@ async def wait_for_login_fields(page, tenant: str, base_login_url: str, max_wait
     pass_loc = None
     while datetime.now().timestamp() < end_time:
         await garantir_tenant(page, tenant)
-        if f"/acesso/{tenant}/" not in page.url:
+        if f"/acesso/{tenant}/" not in page.url and "/acesso/" not in page.url:
             await _forcar_url_via_barra(page, base_login_url)
         if email_loc is None:
             email_loc = await find_first_visible(page, email_selectors, timeout_each=800)
@@ -542,6 +576,8 @@ async def do_login(page, tenant: str, base_login_url: str, user: str, pwd: str) 
             await pass_input.fill("")
             await pass_input.type(pwd, delay=30)
 
+        await asyncio.sleep(1.0)
+
         if not await click_with_retries(entrar_btn, "Entrar", attempts=2, timeout=DEFAULT_TIMEOUT):
             raise RuntimeError("Falha ao clicar em Entrar")
 
@@ -573,8 +609,10 @@ async def do_login(page, tenant: str, base_login_url: str, user: str, pwd: str) 
             except Exception:
                 log("Botão 'Prosseguir' não disponível")
 
-        # Navega para a home do app e verifica se login deu certo
-        app_home_url = f"https://evo5.w12app.com.br/#/app/{tenant}/-2/inicio/geral"
+        # Navega para a home do app utilizando o mesmo domínio/origem da página atual
+        parsed_origin = urllib.parse.urlparse(page.url)
+        base_origin = f"{parsed_origin.scheme}://{parsed_origin.netloc}" if parsed_origin.netloc else "https://evo5.w12app.com.br"
+        app_home_url = f"{base_origin}/#/app/{tenant}/-2/inicio/geral"
         for tentativa in range(3):
             await page.goto(app_home_url, wait_until="domcontentloaded")
             await wait_loading_quiet(page, fast=True)
@@ -796,43 +834,80 @@ async def abrir_menu_financeiro_e_ir_para_nfs(page) -> None:
 async def aplicar_data_ontem(page) -> None:
     global DATA_FILTRO_ATUAL, DATA_FILTRO_MANUAL
 
-    if DATA_FILTRO_MANUAL:
-        DATA_FILTRO_ATUAL = DATA_FILTRO_MANUAL
-        log(f"Aplicando filtro de data [MANUAL]: {DATA_FILTRO_ATUAL}")
+    dt_ini, dt_fim = obter_datas_filtro()
+    is_manual = bool(os.getenv("DATA_INICIAL") or os.getenv("DATA_FINAL") or os.getenv("DATA_FILTRO_MANUAL"))
 
-        # 1️⃣ Abre o dropdown de filtros (Filtro por período)
+    if is_manual:
+        DATA_FILTRO_ATUAL = f"{dt_ini} a {dt_fim}" if dt_ini != dt_fim else dt_ini
+        log(f"Aplicando filtro de data [MANUAL/PERÍODO]: {DATA_FILTRO_ATUAL} (De {dt_ini} Até {dt_fim})")
+
+        # 1️⃣ Abre o dropdown de filtro por período
         btn_data = page.locator("button[data-cy='EFD-DatePickerBTN']").first
+        if not await btn_data.count():
+            btn_data = page.locator("button", has_text=re.compile(r"Data:", re.IGNORECASE)).first
+        
         await btn_data.wait_for(state="visible", timeout=DEFAULT_TIMEOUT)
         await btn_data.click()
         await asyncio.sleep(0.4)
 
-        # 2️⃣ Clica no input para abrir o calendário
-        campo_data = page.locator("input[data-cy='EFD-FormInput-00']").first
-        await campo_data.wait_for(state="visible", timeout=DEFAULT_TIMEOUT)
-        await campo_data.click(force=True)
-        await asyncio.sleep(0.4)
-        log("Campo de data clicado (EFD-FormInput-00) para abrir calendário")
+        overlay = page.locator("div.cdk-overlay-pane").last
 
-        # 3️⃣ Extrai o dia da data manual e clica nele duas vezes (início=dia e fim=dia)
-        dia_num = DATA_FILTRO_MANUAL.split("/")[0].lstrip("0")  # ex: "17/03/2026" → "17"
-        
-        # Filtra pela classe exata da célula do calendário do Angular Material para evitar match parcial com o ano (ex: "2026" matricular no dia 1)
-        dia = page.locator("td.mat-calendar-body-cell").filter(has_text=re.compile(fr"^\s*{dia_num}\s*$")).first
-        if not await dia.count():
-            # Tenta um fallback com get_by_text
-            dia = page.get_by_text(dia_num, exact=True).first
+        # 2️⃣ Clica no último campo/opção no menu do popover (o campo de período customizado acima de APLICAR)
+        log("Clicando no último campo de período do menu do popover...")
+        ultimo_campo = overlay.locator("input[data-cy='EFD-FormInput-00'], input, .mat-list-item-content, div.mat-list-item").last
+        if await ultimo_campo.count():
+            try:
+                await ultimo_campo.click()
+            except Exception:
+                await ultimo_campo.click(force=True)
+            await asyncio.sleep(0.3)
 
-        await dia.wait_for(state="visible", timeout=DEFAULT_TIMEOUT)
-        await dia.click()
-        await asyncio.sleep(0.3)
-        await dia.click()
-        log(f"Dia {dia_num} selecionado (clique duplo) no calendário")
+        # Preenche os inputs text se visíveis
+        campo_ini = overlay.locator("input[data-cy='EFD-FormInput-00']").first
+        if await campo_ini.count() and await campo_ini.is_visible():
+            await campo_ini.click(force=True)
+            await page.keyboard.press("Control+A")
+            await page.keyboard.press("Backspace")
+            await campo_ini.type(dt_ini, delay=24)
+            await asyncio.sleep(0.2)
+
+        campo_fim = overlay.locator("input[data-cy='EFD-FormInput-01']").first
+        if await campo_fim.count() and await campo_fim.is_visible():
+            await campo_fim.click(force=True)
+            await page.keyboard.press("Control+A")
+            await page.keyboard.press("Backspace")
+            await campo_fim.type(dt_fim, delay=24)
+            await asyncio.sleep(0.2)
+
+        # 3️⃣ Seleciona os dias no calendário
+        dia_ini_num = dt_ini.split("/")[0].lstrip("0") or "1"
+        dia_fim_num = dt_fim.split("/")[0].lstrip("0") or "15"
+
+        log(f"Selecionando dia {dia_ini_num} no calendário...")
+        celula_dia_ini = overlay.locator("td.mat-calendar-body-cell").filter(has_text=re.compile(fr"^\s*{dia_ini_num}\s*$")).first
+        if not await celula_dia_ini.count():
+            celula_dia_ini = page.get_by_text(dia_ini_num, exact=True).first
+
+        if await celula_dia_ini.count():
+            await celula_dia_ini.click()
+            await asyncio.sleep(0.3)
+
+        log(f"Selecionando dia {dia_fim_num} no calendário...")
+        celula_dia_fim = overlay.locator("td.mat-calendar-body-cell").filter(has_text=re.compile(fr"^\s*{dia_fim_num}\s*$")).first
+        if not await celula_dia_fim.count():
+            celula_dia_fim = page.get_by_text(dia_fim_num, exact=True).first
+
+        if await celula_dia_fim.count():
+            await celula_dia_fim.click()
+            await asyncio.sleep(0.3)
 
     else:
         log("Aplicando filtro de data: opção 'Ontem'")
 
         # 1️⃣ Abre o seletor de data
         btn_data = page.locator("button[data-cy='EFD-DatePickerBTN']").first
+        if not await btn_data.count():
+            btn_data = page.locator("button", has_text=re.compile(r"Data:", re.IGNORECASE)).first
         await btn_data.wait_for(state="visible", timeout=DEFAULT_TIMEOUT)
         await btn_data.click()
         await asyncio.sleep(0.4)
@@ -852,7 +927,7 @@ async def aplicar_data_ontem(page) -> None:
 
     await asyncio.sleep(0.3)
 
-    # 3️⃣/4️⃣ Clica em APLICAR
+    # 4️⃣ Clica em APLICAR
     aplicar = page.locator(
         "button[data-cy='EFD-ApplyButton'], button",
         has_text=re.compile(r"Aplicar", re.IGNORECASE)
@@ -863,7 +938,7 @@ async def aplicar_data_ontem(page) -> None:
 
     await wait_loading_quiet(page, fast=True)
 
-    log("Filtro de data aplicado.")
+    log(f"Filtro de data aplicado: {DATA_FILTRO_ATUAL}")
 
 
 
@@ -1089,15 +1164,18 @@ async def digitar_data_util_anterior_no_input(page) -> None:
 async def selecionar_data_ontem_modal(page) -> None:
     """
     Dentro do modal de envio: preenche o campo 'Selecione a data' 
-    com a MESMA DATA calculada/definida no filtro (DATA_FILTRO_ATUAL)
+    com a data de emissão/referência (usando a data final do período se for intervalo)
     usando digitação direta (mais seguro que clicar no calendário).
     """
     global DATA_FILTRO_ATUAL
-    if not DATA_FILTRO_ATUAL:
-        # Fallback de segurança caso não exista por algum motivo bizarro
-        DATA_FILTRO_ATUAL = os.getenv("DATA_FILTRO_MANUAL") or (datetime.now() - timedelta(days=1)).strftime("%d/%m/%Y")
+    dt_ini, dt_fim = obter_datas_filtro()
+    data_modal = dt_fim or dt_ini or (datetime.now() - timedelta(days=1)).strftime("%d/%m/%Y")
+    if " " in data_modal:
+        parts = re.findall(r"\d{2}/\d{2}/\d{4}", data_modal)
+        if parts:
+            data_modal = parts[-1]
 
-    log(f"Preenchendo no modal a mesma data do filtro: {DATA_FILTRO_ATUAL}")
+    log(f"Preenchendo no modal a data de referência: {data_modal}")
 
     # Localiza o input dentro do modal de Enviar NF
     dialog = page.locator("mat-dialog-container").last
@@ -1114,9 +1192,9 @@ async def selecionar_data_ontem_modal(page) -> None:
     await asyncio.sleep(0.1)
     
     # Digita o texto formatado no campo de data
-    await campo.type(DATA_FILTRO_ATUAL, delay=24)
+    await campo.type(data_modal, delay=24)
     await asyncio.sleep(0.4)
-    log(f"Data {DATA_FILTRO_ATUAL} preenchida no modal com sucesso")
+    log(f"Data {data_modal} preenchida no modal com sucesso")
 
 async def cancelar_modal_enviar_nf(page) -> None:
     log("Cancelando modal 'Enviar NF'")
@@ -2028,8 +2106,8 @@ async def run_for_tenant(page, tenant: str, base_login_url: str, user: str, pwd:
 
         ## ORDEM DOS SHOPPINGS
 
-        # ⚠️ FILTRO DE TESTE — coloque None para rodar todos os shoppings
-        TESTAR_APENAS = None
+        # ⚠️ FILTRO DE TESTE — coloque None para rodar todos os shoppings (ou configure via env)
+        TESTAR_APENAS = os.getenv("TESTAR_APENAS", None)
 
         global DATA_FILTRO_MANUAL
         DATA_FILTRO_MANUAL = os.getenv("DATA_FILTRO_MANUAL", "")
@@ -2086,7 +2164,7 @@ async def definir_itens_por_pagina(page, qtd: int = 100) -> None:
 # Runner principal (contexto novo por tenant + pausa/fechar após bodytech)
 # =========================
 async def _run(callback_fim) -> None:
-    global HEADLESS, DEBUG_LOGIN, DATA_FILTRO_MANUAL
+    global HEADLESS, DEBUG_LOGIN, DATA_FILTRO_MANUAL, DATA_INICIAL, DATA_FINAL
     
     # Reload .env at runtime to get the latest variables (especially manually configured date)
     load_dotenv(override=True)
@@ -2094,6 +2172,8 @@ async def _run(callback_fim) -> None:
     HEADLESS = os.getenv("HEADLESS", "1").strip() != "0"
     DEBUG_LOGIN = os.getenv("W12_DEBUG_LOGIN", "0").strip() == "1"
     DATA_FILTRO_MANUAL = os.getenv("DATA_FILTRO_MANUAL", "")
+    DATA_INICIAL = os.getenv("DATA_INICIAL", "")
+    DATA_FINAL = os.getenv("DATA_FINAL", "")
     
     rpa_log.info("[INÍCIO] Execução do RPA de Faturamento Academia")
     

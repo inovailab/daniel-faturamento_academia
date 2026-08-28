@@ -1,117 +1,23 @@
-# Documentação Técnica — Sistema de Faturamento de Academia
-
 ### Descrição Resumida
-
-Sistema automatizado de processamento e envio de notas fiscais de serviço (NFS) para academias, desenvolvido em Python com automação RPA via Playwright. O sistema realiza login nas plataformas EVO/W12, aplica filtros de data e tributação, valida cadastros de clientes, corrige automaticamente inconsistências detectadas (endereços, CPF, responsáveis de menores), efetua o envio das notas fiscais diretamente pela plataforma e envia relatórios por e-mail via Gmail API. Todo o processo é executado de forma completamente autônoma, sem qualquer intervenção humana, através de um agendamento automático (cron) que dispara o robô todos os dias às 8h da manhã.
-
----
-
-### Como o Robô Funciona — Passo a Passo Completo
-
-Esta seção descreve, de forma clara e acessível, tudo o que o robô faz do início ao fim, todos os dias, de forma completamente automática.
-
-**1. Disparo automático às 8h da manhã**
-
-Todos os dias, às 8h00, um agendador automático (cron job) instalado no servidor Linux aciona o robô sem nenhuma intervenção humana. O robô acorda, inicializa o ambiente e começa a executar o processo completo do zero.
-
-**2. Login na plataforma EVO**
-
-O robô abre um navegador web em segundo plano (invisível para o usuário) e acessa o sistema EVO. Ele digita automaticamente as credenciais de acesso (usuário e senha) armazenadas de forma segura no servidor. Caso o sistema demore ou apresente algum comportamento inesperado, o robô aguarda e tenta novamente antes de reportar erro.
-
-**3. Seleção da primeira academia (tenant Bodytech)**
-
-Após o login, o robô navega até a seleção de unidades. Ele processa, em sequência, todas as 7 unidades da Bodytech:
-
-- BT TIJUC — Shopping Tijuca
-- BT VELHA — Shop. Praia da Costa
-- BT MALVA — Shopping Mestre Álvaro
-- BT MOXUA — Shopping Moxuara
-- BT SLUIS — Shopping da Ilha
-- BT VITOR — Shopping Vitória
-- BT TERES — Shopping Rio Poty
-
-Para cada unidade, o robô executa os passos 4 a 9 descritos abaixo.
-
-**4. Acesso à área de Notas Fiscais de Serviço**
-
-Dentro de cada unidade, o robô navega automaticamente pelo menu financeiro até chegar à tela de Notas Fiscais de Serviço (NFS).
-
-**5. Aplicação dos filtros de data e tributação**
-
-O robô aplica os filtros necessários para processar apenas as notas do dia anterior, seleciona a ordenação por data de vencimento e marca todas as opções de tributação disponíveis (excluindo automaticamente qualquer opção marcada como "Não usar").
-
-**6. Validação dos cadastros dos clientes**
-
-Antes de enviar as notas, o robô verifica todos os cadastros dos clientes que aparecem na lista. Ele identifica automaticamente os seguintes tipos de inconsistências:
-
-- **Endereço com número inválido** — campo em branco ou preenchido com letras em vez de números
-- **CPF ausente em cadastros brasileiros** — indica menor de idade sem responsável cadastrado
-- **Responsável de menor não configurado** — falta do vínculo de responsabilidade no sistema
-
-**7. Correção automática dos cadastros**
-
-Para cada inconsistência encontrada, o robô tenta corrigi-la automaticamente:
-
-- Abre o perfil do cliente dentro do sistema EVO
-- Preenche o número do endereço com "0" quando o campo está vazio ou inválido
-- Remove caracteres indevidos de campos numéricos
-- Acessa a aba "Responsáveis" e marca os checkboxes necessários para clientes menores de idade
-- Salva as alterações e retorna à lista principal
-
-Caso o problema **não possa** ser corrigido automaticamente (ex: CPF inválido, dados complexos de endereço), o cadastro é registrado na lista de inválidos que será enviada por e-mail ao final.
-
-**8. Envio das Notas Fiscais**
-
-Após a validação e as correções, o robô seleciona todos os registros válidos e inicia o processo de envio das notas fiscais diretamente pela plataforma EVO. Ele:
-
-- Clica em "Selecionar todos"
-- Aciona o botão de envio
-- Preenche a data de referência no modal de envio (utilizando a mesma data do filtro aplicado anteriormente)
-- Confirma o envio e aguarda a plataforma processar e fechar o modal
-
-**9. Próxima unidade**
-
-Concluído o processo em uma unidade, o robô repete os passos 4 a 8 para a próxima unidade da lista, até processar todas as 7.
-
-**10. Envio do e-mail de validação**
-
-Ao finalizar todas as unidades, o robô envia automaticamente um e-mail de notificação para a equipe responsável. O conteúdo do e-mail varia conforme o resultado:
-
-- **Processo concluído sem pendências:** e-mail informando que o processamento do dia foi concluído com sucesso, sem cadastros inválidos.
-- **Processo concluído com pendências:** e-mail listando todos os cadastros que não puderam ser corrigidos automaticamente, com os dados do cliente, CPF, situação e unidade — para que a equipe possa resolver manualmente.
-
-O e-mail é enviado automaticamente para: Lourenço Sodré, Gabrieli Dias, Kátia Canal e o time InovaiLab.
-
-**11. Encerramento**
-
-O robô fecha o navegador, registra nos logs que a execução foi concluída com sucesso e aguarda o próximo dia para reiniciar o ciclo.
-
----
+O projeto consiste em um sistema integrado de saneamento e automação de faturamento de recebíveis para unidades de academias (principalmente sob a marca Bodytech e Formula). Ele é estruturado em uma aplicação web desenvolvida com o microframework Flask (Python) no backend e uma interface responsiva baseada em HTML5, JavaScript vanilla e Lucide Icons no frontend. A principal inteligência do sistema é um robô de automação de processos robóticos (RPA) construído com a biblioteca Playwright, que navega de forma assíncrona pelas plataformas EVO/W12 para realizar o login multi-tenant, selecionar unidades de forma robusta, filtrar e emitir Notas Fiscais de Serviço (NFS). Além disso, o sistema conta com um utilitário chamado "Corretor de CPF", que permite a importação de planilhas Excel ou CSV contendo CPFs e realiza a auto-detecção da coluna relevante, preenchendo zeros à esquerda para normalizar os CPFs com 11 dígitos, oferecendo visualização prévia e exportação de arquivos corrigidos.
 
 ### Problema/Oportunidade
-
-Academias com múltiplas unidades enfrentam processos manuais e repetitivos de emissão de notas fiscais de serviço, que exigem validação de cadastros de clientes, aplicação de filtros complexos de tributação e correção de inconsistências cadastrais. O processo manual é suscetível a erros humanos, consome tempo significativo da equipe administrativa e dificulta a rastreabilidade de problemas. A oportunidade identificada é automatizar completamente este fluxo, reduzindo o tempo de processamento de horas para minutos, garantindo consistência nos dados cadastrais, eliminando erros de digitação e permitindo auditoria completa através de logs estruturados e monitoramento em tempo real.
-
----
+O faturamento de recebíveis e a emissão de notas fiscais de serviço em redes de academias com múltiplos estabelecimentos são processos altamente manuais, repetitivos e propensos a falhas operacionais. A equipe administrativa precisa acessar o portal de faturamento individualmente para cada filial, aplicar filtros de data e regras tributárias complexas, e conferir manualmente se os cadastros dos clientes estão consistentes antes da emissão. Erros comuns como endereços com números ausentes ou preenchidos com letras, bem como a ausência de responsáveis legais configurados para menores de idade sem CPF próprio, travam a emissão de notas fiscais na plataforma. Isso gera atrasos na conciliação, retrabalho administrativo e riscos de inconformidade fiscal. A oportunidade consiste em automatizar e unificar o fluxo ponta a ponta, permitindo a execução autônoma do faturamento em segundo plano ou sob demanda, com inteligência para validar dados cadastrais e corrigir inconsistências em tempo real, reduzindo drasticamente o tempo gasto e aumentando a confiabilidade do processo.
 
 ### Objetivos
-
-Automatizar o ciclo completo de processamento e envio de notas fiscais de serviço para múltiplas unidades de academias, incluindo autenticação em sistemas multi-tenant, aplicação de filtros de data e tributação, validação e correção automática de cadastros de clientes (endereços inválidos, CPF ausente, responsáveis de menores), envio efetivo das notas fiscais pela plataforma EVO, geração de relatórios de inconsistências não corrigíveis e monitoramento distribuído em tempo real. O sistema opera de forma completamente autônoma, 24/7, sem necessidade de qualquer intervenção humana, via agendamento de cron job diário às 8h da manhã.
-
----
+Os objetivos do sistema compreendem tanto aspectos funcionais quanto de arquitetura técnica. Funcionalmente, o sistema visa eliminar a necessidade de execução manual do faturamento diário através de um processo automatizado disparado via agendamento cron ou por acionamento web simples. O robô deve ser capaz de processar sequencialmente as unidades das marcas Bodytech e Formula, identificando cadastros com erros de endereço ou de CPF, aplicando correções automáticas como preenchimento de campos nulos com valores padrão, limpeza de caracteres não numéricos e configuração de responsáveis para menores. O sistema deve emitir as notas válidas, gerar relatórios de auditoria local em formato JSON e enviar um resumo consolidado por e-mail para os gestores, detalhando os casos que não puderam ser corrigidos de forma automática. Tecnicamente, o objetivo é fornecer uma aplicação robusta, com persistência flexível, que execute o robô em segundo plano através de threads dedicadas para não travar a experiência do usuário na interface web.
 
 ### Alinhamento Estratégico
-
-A arquitetura do sistema foi projetada para escalabilidade horizontal e vertical. O uso de Flask permite deploy rápido em ambientes cloud (Render, Heroku) ou on-premise, com suporte a PostgreSQL para produção e SQLite para desenvolvimento. A automação via Playwright garante compatibilidade cross-platform (Windows/Linux) e permite execução headless em servidores sem interface gráfica. A integração com RPA Monitor Client possibilita gestão centralizada de múltiplas instâncias do RPA, com monitoramento de status, logs e screenshots em tempo real. O sistema de correção automática de cadastros reduz a dependência de intervenção manual, permitindo que a equipe foque em exceções realmente críticas. A execução diária às 8h via cron job garante que o processo sempre ocorra no início do expediente, com o relatório de resultados já disponível na caixa de e-mail da equipe antes que qualquer atendimento precise ocorrer. A arquitetura modular facilita a adição de novas unidades, tenants e regras de validação sem impacto no código existente.
-
----
+A escolha da stack tecnológica baseada em Python, Flask e Playwright está diretamente alinhada à necessidade de portabilidade e baixo custo operacional. O uso do Flask fornece uma arquitetura leve, facilmente conteinerizável em ambientes Docker, viabilizando o deploy simplificado em servidores locais ou em nuvem. A modelagem de banco de dados por meio do SQLAlchemy assegura a independência do motor de banco de dados, utilizando o PostgreSQL para armazenar de forma segura usuários e logs em produção, ao mesmo tempo em que mantém a compatibilidade com o SQLite para facilitar testes e desenvolvimento local. A automação com Playwright permite a execução headless em servidores Linux ou Windows sem dependência de interfaces gráficas pesadas. A integração estratégica com a API do Gmail garante a notificação passiva dos envolvidos sem necessidade de painéis de acompanhamento adicionais, e a conexão com o RPA Monitor Client centraliza a telemetria, logs de erro e capturas de tela em tempo real, garantindo rastreabilidade técnica essencial para a manutenção contínua e escalabilidade operacional do sistema.
 
 ### Escopo do Projeto
+O escopo atual implementado no código-fonte engloba os seguintes módulos e funcionalidades. No backend, há uma aplicação Flask estruturada com controle de autenticação de usuários e persistência em banco de dados usando SQLAlchemy para as tabelas de usuários (com senha criptografada via Werkzeug hash) e logs de upload. O módulo de automação RPA (Playwright) implementa a lógica de login na plataforma EVO/W12, seleção dinâmica de unidades através de buscas ou varreduras com scroll, navegação para a área de Notas Fiscais de Serviço, aplicação de filtros de data e seleção de múltiplos códigos de tributação (descartando termos inválidos ou sinalizados para não uso). Há um subsistema de higienização de dados que valida cadastros de clientes em solo nacional, corrige números de endereços vazios ou com caracteres alfabéticos (substituindo por zero ou filtrando números), e configura responsáveis legais vinculando checkboxes adequados para clientes identificados como menores de idade sem CPF. O sistema também possui um fluxo para envio efetivo de notas fiscais através da confirmação da data correspondente ao período filtrado e fechamento automático de modais. Há integração com a Gmail API para envio de e-mails detalhados de sucesso ou com a lista de pendências não sanáveis. Por fim, a interface web oferece um dashboard interativo com controle de abas para o acionamento assíncrono do RPA e a ferramenta de correção de CPFs que permite fazer o upload de arquivos Excel e CSV, processá-los na memória com a biblioteca Pandas, exibir um preview formatado na tela com filtros de busca e disponibilizar o arquivo atualizado para download.
 
-O sistema implementa os seguintes módulos e funcionalidades: (1) Backend Flask com autenticação de usuários (login/logout), gestão de sessões e API REST para controle de processos RPA; (2) Banco de dados SQLAlchemy com suporte a PostgreSQL e SQLite, incluindo modelos para usuários e logs; (3) Automação RPA com Playwright para navegação em sistemas EVO/W12, incluindo login multi-tenant, seleção de unidades, aplicação de filtros de data e tributação, validação de cadastros, correção automática de inconsistências e envio das notas fiscais; (4) Sistema de validação de cadastros com detecção de CPF inválido, endereços incompletos (campo "Número" vazio ou com letras), identificação de menores de idade sem responsável e usuários estrangeiros; (5) Correção automática de cadastros com preenchimento de campo "Número" com valor padrão "0", limpeza de caracteres não numéricos em endereços e marcação de checkboxes de responsáveis para menores; (6) Envio efetivo das notas fiscais diretamente pela plataforma EVO, mediante seleção de todos os registros e confirmação no modal de envio com data de referência; (7) Integração com Gmail API para envio de relatório consolidado ao final de cada execução, informando sucesso ou listando cadastros inválidos não corrigíveis; (8) Agendamento automático via cron job (diário às 8h00) que executa todo o processo de forma autônoma, sem intervenção humana; (9) Interface web responsiva com dashboard para iniciar processos manualmente, visualização de status em tempo real e página de relatórios; (10) Sistema de monitoramento distribuído com RPA Monitor Client, incluindo envio de logs, eventos e screenshots via WebSocket; (11) Suporte a múltiplos tenants (bodytech, formula) com processamento sequencial de unidades específicas (Shopping Tijuca, Praia da Costa, Shopping da Ilha, Shopping Vitória, Shopping Rio Poty, Shopping Mestre Álvaro, Shopping Moxuara); (12) Sistema de paginação e scroll infinito para coleta completa de registros em tabelas sem limite de páginas; (13) Ordenação automática por coluna "Cadastro" para priorização de registros inválidos; (14) Geração de relatórios JSON com metadados de execução, timestamps e estatísticas de processamento.
-
----
+### Fora do Escopo
+O escopo do sistema atual não contempla a geração própria de notas fiscais ou a integração direta via API com a Receita Federal ou com os sistemas das prefeituras municipais para emissão externa, dependendo exclusivamente do portal da plataforma EVO para a efetivação das notas. Também estão fora do escopo funcionalidades de faturamento recorrente automático baseado em cartões de crédito ou cobranças bancárias diretas dentro do próprio Flask, uma vez que o processamento financeiro em si é de responsabilidade da plataforma EVO. Não há no sistema um módulo administrativo completo para o cadastro e edição de novos tenants ou novas regras complexas de faturamento diretamente pela interface gráfica, exigindo alterações no código-fonte para adição de novas academias ou modificação das expressões regulares de seleção de filiais. O sistema também não fornece relatórios gráficos ou de business intelligence complexos em tempo real sobre os valores faturados, limitando-se ao relatório consolidado de auditoria textual e ao arquivo JSON com os registros.
 
 ### Premissas
+As premissas adotadas no desenvolvimento do sistema assumem que as credenciais do sistema EVO/W12 e os dados de acesso da API do Google/Gmail estão corretamente configurados e disponíveis nas variáveis de ambiente descritas no arquivo .env. Assume-se que o banco de dados PostgreSQL estará acessível em ambientes de homologação e produção, possuindo um mecanismo de fallback automático para o banco SQLite local a fim de evitar a paralisação completa do serviço em caso de problemas de rede. O sistema pressupõe a existência de um agendamento cron diário no servidor Linux configurado para disparar o script run_click.sh às 8h da manhã, o qual chama o run_rpa_direto.py em modo headless para garantir a execução autônoma contínua. Para a automação da interface, estabeleceu-se a premissa de que a ordenação por cadastro deve ser aplicada para manter as inconsistências sempre no topo da tabela, e que o scroll da tabela possui um limite de 400 iterações para evitar que falhas de detecção causem loops infinitos no robô. A validação de CPFs da planilha importada manualmente baseia-se na premissa de que a coluna contendo o identificador pode ser inferida de maneira inteligente pela proximidade textual de seu cabeçalho com padrões conhecidos ou pela proporção de dígitos numéricos válidos encontrados nas primeiras linhas do arquivo.
 
-O sistema adota as seguintes premissas técnicas: (1) Stack Python 3.10+ com Flask 3.0+, SQLAlchemy 2.0+, Playwright 1.40+ e PyAutoGUI para automação; (2) Banco de dados PostgreSQL em produção com fallback automático para SQLite em caso de indisponibilidade; (3) Autenticação básica com hash de senhas via Werkzeug (bcrypt); (4) Credenciais de acesso aos sistemas EVO/W12 armazenadas em variáveis de ambiente (.env); (5) Execução assíncrona de processos RPA via threading para não bloquear a interface web; (6) Comunicação entre frontend e backend via polling HTTP (endpoints /wait_finish e /api/report); (7) Logs estruturados com RPA Monitor Client enviados via WebSocket para servidor centralizado; (8) Screenshots de erro salvos localmente em ~/Downloads/faturamento_academia; (9) Relatórios JSON salvos em last_report.json na raiz do projeto; (10) Timeout padrão de 6 segundos para operações de UI, com timeouts reduzidos (1.5s-3s) para operações rápidas; (11) Retry automático com force=True em caso de falha de clique; (12) Normalização de texto (remoção de acentos, lowercase) para comparações robustas; (13) Detecção de país via campo "País" no cadastro para filtrar usuários estrangeiros; (14) Detecção de menores via ausência de CPF em cadastros brasileiros; (15) Ordenação por coluna "Cadastro" para priorizar registros inválidos no topo da tabela; (16) Limite de 400 passos de scroll para evitar loops infinitos em tabelas muito grandes; (17) Envio único de e-mail consolidado ao final do processo com todos os cadastros inválidos não corrigíveis; (18) Cron job configurado no servidor Linux com execução diária às 08:00 (horário de Brasília), disparando o script run_click.sh que aciona run_rpa_direto.py em modo headless, sem necessidade de sessão de usuário ativa ou qualquer interação manual.
+### Restrições
+Entre as restrições identificadas na análise técnica da solução, destaca-se a forte dependência da estabilidade da interface do usuário da plataforma EVO/W12, de modo que qualquer alteração de layout, nomes de atributos ou seletores CSS/XPath nos componentes da página web pode quebrar o fluxo de automação do Playwright, exigindo manutenção de código. A execução assíncrona do RPA é controlada por threads em Python, o que impõe restrições em ambientes de execução concorrente devido ao Global Interpreter Lock (GIL) e à ausência de uma fila de mensagens ou de gerenciamento distribuído de tarefas mais robusto (como Celery ou Redis) para lidar com múltiplos disparos simultâneos. O monitoramento por imagens em ambientes Linux Headless possui restrições técnicas que levaram à desativação de capturas de tela do PyAutoGUI para evitar travamentos devido à falta de um display server configurado no ambiente de terminal. Outra restrição de arquitetura é o limite máximo de tamanho de upload de arquivos de planilha fixado em 16 megabytes na configuração do Flask, além da dependência de credenciais do Gmail API persistidas localmente ou através de chaves estáticas no ambiente, o que pode causar falhas de autenticação recurrentes se os tokens de atualização expirarem ou forem revogados pelo provedor de serviços de e-mail.
