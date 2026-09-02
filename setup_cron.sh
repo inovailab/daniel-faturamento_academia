@@ -19,21 +19,19 @@ echo "🔒 Garantindo permissão de execução no run_click.sh..."
 chmod +x "$SCRIPT"
 
 # ---------------------------------------------------------------
-# Cron: 11h00 horário de Brasília (BRT = UTC-3 → 14:00 UTC)
-# Ignora o dia 04/07/2026 (amanhã)
+# Cron: 09h30 horário de Brasília (BRT = UTC-3 → 12:30 UTC)
 # ---------------------------------------------------------------
 
 echo "📝 Registrando cron em /etc/cron.d/rpa_faturamento..."
 cat > /etc/cron.d/rpa_faturamento <<EOF
-# Roda o RPA de faturamento todos os dias às 11h BRT (14h UTC)
-# Ignora o dia 04/07/2026 (amanhã)
+# Roda o RPA de faturamento todos os dias às 9h30 BRT (12h30 UTC)
 SHELL=/bin/bash
 PATH=/opt/app/daniel-faturamento_academia/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 HOME=/root
 PLAYWRIGHT_BROWSERS_PATH=/root/.cache/ms-playwright
 HEADLESS=1
 
-0 14 * * * root [ \$(date +\%Y-\%m-\%d) != '2026-07-04' ] && bash $SCRIPT >> $LOG_FILE 2>&1
+30 12 * * * root bash $SCRIPT >> $LOG_FILE 2>&1
 EOF
 
 chmod 644 /etc/cron.d/rpa_faturamento

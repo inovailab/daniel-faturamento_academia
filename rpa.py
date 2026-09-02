@@ -283,6 +283,16 @@ def obter_datas_filtro() -> Tuple[str, str]:
     Busca por DATA_INICIAL, DATA_FINAL e DATA_FILTRO_MANUAL no ambiente.
     Se nenhuma estiver definida, retorna o dia de ontem para ambas.
     """
+    def normalizar_data(d_str: str) -> str:
+        d_str = d_str.strip()
+        m = re.match(r"^(\d{1,2})/(\d{1,2})/(\d{2,4})$", d_str)
+        if m:
+            d, m_val, y = m.groups()
+            if len(y) == 2:
+                y = f"20{y}"
+            return f"{int(d):02d}/{int(m_val):02d}/{y}"
+        return d_str
+
     dt_ini = os.getenv("DATA_INICIAL", "").strip()
     dt_fim = os.getenv("DATA_FINAL", "").strip()
     manual = os.getenv("DATA_FILTRO_MANUAL", "").strip()
@@ -303,7 +313,8 @@ def obter_datas_filtro() -> Tuple[str, str]:
     if not dt_fim:
         dt_fim = dt_ini
 
-    return dt_ini, dt_fim
+    return normalizar_data(dt_ini), normalizar_data(dt_fim)
+
 
 
 # =========================
