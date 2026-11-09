@@ -583,4 +583,5 @@ app.register_blueprint(bp)
 if __name__ == "__main__":
     host = os.getenv("HOST", "0.0.0.0")
     port = int(os.getenv("PORT", "5000"))
-    app.run(host=host, port=port, debug=True, use_reloader=True)
+    debug_mode = os.getenv("FLASK_DEBUG", "0").lower() in ("1", "true", "yes", "on")
+    app.run(host=host, port=port, debug=debug_mode, use_reloader=debug_mode, threaded=True)
