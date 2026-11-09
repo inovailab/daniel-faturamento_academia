@@ -22,7 +22,13 @@ from playwright.async_api import async_playwright, TimeoutError as PlaywrightTim
 # Carrega .env e parâmetros
 # =========================
 # override=False garante que se a variável já existir (exportada via shell no run_click.sh), ela não seja esmagada com o que tem no .env
-load_dotenv(override=False)
+_BASE_ENV_DIR = Path(__file__).resolve().parent
+for _env_candidate in (_BASE_ENV_DIR / ".env", _BASE_ENV_DIR / "assets" / ".env"):
+    if _env_candidate.exists():
+        load_dotenv(_env_candidate, override=False)
+        break
+else:
+    load_dotenv(override=False)
 
 # =========================
 # RPA Monitor Client Setup
@@ -39,13 +45,21 @@ def _filtered_print(*args, **kwargs):
     _original_print(*args, **kwargs)
 _builtins.print = _filtered_print
 
-setup_rpa_monitor(
-    rpa_id=os.getenv("RPA_MONITOR_ID"),
-    host=os.getenv("RPA_MONITOR_HOST"),
-    port=os.getenv("RPA_MONITOR_PORT"),
-    region=os.getenv("RPA_MONITOR_REGION"),
-    transport=os.getenv("RPA_MONITOR_TRANSPORT"),
-)
+# Monitor é opcional: sem RPA_MONITOR_ID o app não deve quebrar no import
+_RPA_MONITOR_ID = (os.getenv("RPA_MONITOR_ID") or "").strip()
+if _RPA_MONITOR_ID:
+    try:
+        setup_rpa_monitor(
+            rpa_id=_RPA_MONITOR_ID,
+            host=os.getenv("RPA_MONITOR_HOST"),
+            port=os.getenv("RPA_MONITOR_PORT"),
+            region=os.getenv("RPA_MONITOR_REGION"),
+            transport=os.getenv("RPA_MONITOR_TRANSPORT"),
+        )
+    except Exception as _exc:
+        _original_print(f"[rpa] Monitor não inicializado: {_exc}")
+else:
+    _original_print("[rpa] RPA_MONITOR_ID ausente — monitor desativado")
 
 # [FIX] No modo Linux Headless, o rpa_log.screenshot usa internamente o pyautogui
 # O pyautogui exige monitor/display. Isso estava causando crash completo ao logar um erro de Timeout.
@@ -242,7 +256,13 @@ def _extract_tenant_from_url(url: str) -> str:
 # Constantes e diretórios
 # =========================
 SCREENSHOT_DIR = Path.home() / "Downloads" / "faturamento_academia"
-SCREENSHOT_DIR.mkdir(parents=True, exist_ok=True)
+try:
+    SCREENSHOT_DIR.mkdir(parents=True, exist_ok=True)
+except Exception:
+    # Ambiente sem acesso à pasta Downloads (ex.: execução local/sandbox):
+    # cai para uma pasta dentro do próprio projeto
+    SCREENSHOT_DIR = _BASE_ENV_DIR / "screenshots"
+    SCREENSHOT_DIR.mkdir(parents=True, exist_ok=True)
 
 DEFAULT_TIMEOUT = 6000
 SHORT_TIMEOUT   = 3000
@@ -489,6 +509,60 @@ async def wait_for_login_fields(page, tenant: str, base_login_url: str, max_wait
 # =========================
 # Etapas do fluxo
 # =========================
+async def logar_diagnostico_login(page, tenant: str) -> None:
+    """Coleta evidências da tela quando o login não avança (erro visível, captcha, MFA)."""
+    try:
+        log("=== DIAGNÓSTICO DA TELA DE LOGIN ===")
+        log(f"URL atual: {page.url}")
+
+        alvos = [
+            ("toast/mensagem", "simple-snack-bar, .mat-snack-bar-container, snack-bar-container, [role=alert]"),
+            ("erro de campo", "mat-error, .mat-error"),
+            ("dialogo", "mat-dialog-container, .mat-dialog-container"),
+            ("faixa de aviso", ".alert, .mensagem-erro, .toast-message, .aviso"),
+        ]
+        for nome, seletor in alvos:
+            try:
+                loc = page.locator(seletor).first
+                if await loc.count() and await loc.is_visible():
+                    texto = " ".join(((await loc.inner_text()) or "").split())
+                    if texto:
+                        log(f"[{nome}] {texto[:300]}")
+            except Exception:
+                pass
+
+        html = (await page.content()).lower()
+        marcadores = {
+            "reCAPTCHA": "recaptcha",
+            "hCaptcha": "hcaptcha",
+            "Cloudflare challenge": "challenge-platform",
+            "verificação em duas etapas": "two-factor",
+        }
+        for nome, marca in marcadores.items():
+            if marca in html:
+                log(f"[⚠] Bloqueio detectado na tela: {nome}")
+
+        try:
+            campo_email = page.locator(
+                "input[type=email], input[name*=mail i], input[formcontrolname*=mail i]"
+            ).first
+            if await campo_email.count():
+                valor = await campo_email.input_value()
+                log(f"Campo e-mail preenchido: {'sim' if valor else 'NÃO'}")
+        except Exception:
+            pass
+
+        try:
+            corpo = " ".join(((await page.locator("body").inner_text()) or "").split())
+            log(f"[texto visível] {corpo[:600]}")
+        except Exception:
+            pass
+
+        log("=== FIM DO DIAGNÓSTICO ===")
+    except Exception as exc:
+        log(f"(diagnóstico da tela de login indisponível: {exc})")
+
+
 async def do_login(page, tenant: str, base_login_url: str, user: str, pwd: str) -> None:
     import random
     rpa_log.info(f"[INÍCIO] Processo de login (tenant={tenant})")
@@ -636,6 +710,7 @@ async def do_login(page, tenant: str, base_login_url: str, user: str, pwd: str) 
         else:
             log(f"⚠ Login pode ter falhado — URL final: {page.url}")
             if "/acesso/" in page.url or "/autenticacao" in page.url:
+                await logar_diagnostico_login(page, tenant)
                 raise RuntimeError(f"Login falhou para tenant '{tenant}'. URL final: {page.url}")
 
         rpa_log.info(f"[FIM] Processo de login concluído com sucesso (tenant={tenant})")

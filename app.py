@@ -28,13 +28,19 @@ from flask import (
 )
 from werkzeug.security import check_password_hash, generate_password_hash
 from dotenv import load_dotenv
+from pathlib import Path
+
+# Carrega variáveis de ambiente ANTES de importar db/models/rpa
+# (rpa.py inicializa o monitor no import e depende de RPA_MONITOR_ID)
+_BASE_ENV_DIR = Path(__file__).resolve().parent
+for _env_candidate in (_BASE_ENV_DIR / ".env", _BASE_ENV_DIR / "assets" / ".env"):
+    if _env_candidate.exists():
+        load_dotenv(_env_candidate, override=False)
+        break
 
 from db import SessionLocal, init_db_and_seed_admin, get_paths
 from models import User, UploadLog
 from rpa import run_rpa_enter_google_folder, _ensure_local_zip_from_drive
-
-# Carrega variáveis de ambiente do .env
-load_dotenv()
 
 # Define diretório de upload conforme SO
 system_name = platform.system().lower()
@@ -52,7 +58,13 @@ if platform.system() == "Windows":
 else:
     UPLOAD_DIR = os.getenv("CNAB_LOCAL_DIR", "/home/felipe/Downloads/arquivos")
 
-os.makedirs(UPLOAD_DIR, exist_ok=True)
+try:
+    os.makedirs(UPLOAD_DIR, exist_ok=True)
+except OSError:
+    # Ambiente sem permissão na pasta configurada (ex.: execução local):
+    # cai para a pasta uploads do próprio projeto
+    UPLOAD_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "uploads")
+    os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 # Inicializa app Flask
 app = Flask(__name__, template_folder="templates")
